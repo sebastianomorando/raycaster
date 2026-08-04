@@ -46,3 +46,6 @@ Controlli: `W/S` avanti e indietro, `A/D` rotazione di 90°, `Q/E` strafing,
 frecce come alternativa, `Spazio` per la pausa e `R` per ricominciare.
 
 This project was created using `bun init` in bun v1.3.14. [Bun](https://bun.com) is a fast all-in-one JavaScript runtime.
+
+Inserire nella cartella ModularDungeon i modelli OBJ e le texture del livello. Presi da LowPoly Models by @Quaternius
+https://quaternius.com/packs/modulardungeon.html
