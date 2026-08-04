@@ -16,8 +16,9 @@ import {
 } from "./mesh.ts";
 import { createWebGpuRenderer, type WebGpuRenderer } from "./renderer-webgpu.ts";
 
-const WIDTH = 64;
-const HEIGHT = 64;
+const RESOLUTIONS = [32, 64, 128, 256] as const;
+type RenderResolution = typeof RESOLUTIONS[number];
+let renderSize: RenderResolution = 64;
 const TILE_SIZE = 2;
 const EYE_HEIGHT = 0.68;
 const MAX_BOUNCES = 5;
@@ -499,21 +500,22 @@ const sampleLabel = document.querySelector<HTMLElement>("#samples");
 const messageLabel = document.querySelector<HTMLElement>("#message");
 const positionLabel = document.querySelector<HTMLElement>("#position");
 const healthLabel = document.querySelector<HTMLElement>("#health");
+const resolutionButton = document.querySelector<HTMLButtonElement>("#resolution");
 if (!canvasElement) throw new Error("Canvas #app non trovato");
 let canvas = canvasElement;
-canvas.width = WIDTH;
-canvas.height = HEIGHT;
+canvas.width = renderSize;
+canvas.height = renderSize;
 
 const canvasContext = canvas.getContext("2d", { alpha: false });
 if (!canvasContext) throw new Error("Contesto 2D non disponibile");
 const context = canvasContext;
 context.imageSmoothingEnabled = false;
 
-const image = context.createImageData(WIDTH, HEIGHT);
-const accumulation = new Float32Array(WIDTH * HEIGHT * 3);
-const resolved = new Float32Array(WIDTH * HEIGHT * 3);
-const denoisedA = new Float32Array(WIDTH * HEIGHT * 3);
-const denoisedB = new Float32Array(WIDTH * HEIGHT * 3);
+let image = context.createImageData(renderSize, renderSize);
+let accumulation = new Float32Array(renderSize * renderSize * 3);
+let resolved = new Float32Array(renderSize * renderSize * 3);
+let denoisedA = new Float32Array(renderSize * renderSize * 3);
+let denoisedB = new Float32Array(renderSize * renderSize * 3);
 
 const player = {
   column: startCell.column,
@@ -533,6 +535,8 @@ let lastTime = performance.now();
 let cameraDirty = true;
 let paused = false;
 let gpuRenderer: WebGpuRenderer | null = null;
+let packedSceneCache: ReturnType<typeof packMeshScene> | null = null;
+let resolutionChanging = false;
 
 function resetAccumulation(): void {
   accumulation.fill(0);
@@ -554,8 +558,8 @@ function cameraRay(
   const sampleX = stablePrimary ? 0.5 : random();
   const sampleY = stablePrimary ? 0.5 : random();
   const scale = Math.tan(camera.fov * 0.5);
-  const screenX = (2 * ((x + sampleX) / WIDTH) - 1) * scale;
-  const screenY = (1 - 2 * ((y + sampleY) / HEIGHT)) * scale;
+  const screenX = (2 * ((x + sampleX) / renderSize) - 1) * scale;
+  const screenY = (1 - 2 * ((y + sampleY) / renderSize)) * scale;
   const pinholeDirection = normalize(add(add(forward, mul(right, screenX)), mul(up, screenY)));
   if (stablePrimary) return { origin: camera.position, direction: pinholeDirection };
 
@@ -581,9 +585,9 @@ function aces(value: number): number {
 
 function renderSample(stablePrimary = false): void {
   const basis = cameraBasis();
-  for (let y = 0; y < HEIGHT; y += 1) {
-    for (let x = 0; x < WIDTH; x += 1) {
-      const pixel = y * WIDTH + x;
+  for (let y = 0; y < renderSize; y += 1) {
+    for (let x = 0; x < renderSize; x += 1) {
+      const pixel = y * renderSize + x;
       randomState = ((pixel + 1) * 0x9e3779b1 ^ (samples + 1) * 0x85ebca6b) | 1;
       const color = trace(cameraRay(x, y, basis, stablePrimary));
       const accumulator = pixel * 3;
@@ -608,9 +612,9 @@ function writePixel(pixel: number, color: Vec3): void {
 
 function denoisePass(source: Float32Array, target: Float32Array, step: number, sigma: number): void {
   const sigmaSquared = sigma * sigma;
-  for (let y = 0; y < HEIGHT; y += 1) {
-    for (let x = 0; x < WIDTH; x += 1) {
-      const center = (y * WIDTH + x) * 3;
+  for (let y = 0; y < renderSize; y += 1) {
+    for (let x = 0; x < renderSize; x += 1) {
+      const center = (y * renderSize + x) * 3;
       const centerR = source[center] ?? 0;
       const centerG = source[center + 1] ?? 0;
       const centerB = source[center + 2] ?? 0;
@@ -620,10 +624,10 @@ function denoisePass(source: Float32Array, target: Float32Array, step: number, s
       let totalWeight = 0;
 
       for (let offsetY = -1; offsetY <= 1; offsetY += 1) {
-        const sampleY = Math.max(0, Math.min(HEIGHT - 1, y + offsetY * step));
+        const sampleY = Math.max(0, Math.min(renderSize - 1, y + offsetY * step));
         for (let offsetX = -1; offsetX <= 1; offsetX += 1) {
-          const sampleX = Math.max(0, Math.min(WIDTH - 1, x + offsetX * step));
-          const sample = (sampleY * WIDTH + sampleX) * 3;
+          const sampleX = Math.max(0, Math.min(renderSize - 1, x + offsetX * step));
+          const sample = (sampleY * renderSize + sampleX) * 3;
           const sampleR = source[sample] ?? 0;
           const sampleG = source[sample + 1] ?? 0;
           const sampleB = source[sample + 2] ?? 0;
@@ -648,7 +652,7 @@ function denoisePass(source: Float32Array, target: Float32Array, step: number, s
 
 function present(): void {
   const inverseSamples = 1 / Math.max(1, samples);
-  for (let pixel = 0; pixel < WIDTH * HEIGHT; pixel += 1) {
+  for (let pixel = 0; pixel < renderSize * renderSize; pixel += 1) {
     const index = pixel * 3;
     resolved[index] = (accumulation[index] ?? 0) * inverseSamples;
     resolved[index + 1] = (accumulation[index + 1] ?? 0) * inverseSamples;
@@ -661,7 +665,7 @@ function present(): void {
     denoisePass(denoisedA, denoisedB, 2, 0.45);
   }
 
-  for (let pixel = 0; pixel < WIDTH * HEIGHT; pixel += 1) {
+  for (let pixel = 0; pixel < renderSize * renderSize; pixel += 1) {
     const index = pixel * 3;
     writePixel(pixel, v(
       (resolved[index] ?? 0) * (1 - denoiseStrength) + (denoisedB[index] ?? 0) * denoiseStrength,
@@ -793,7 +797,9 @@ function frame(now: number): void {
   updateHud(now);
   playerLight.position = add(camera.position, v(0, 0.14, 0));
 
-  if (gpuRenderer && !paused) {
+  if (resolutionChanging) {
+    if (sampleLabel) sampleLabel.textContent = `${samples} spp · cambio risoluzione`;
+  } else if (gpuRenderer && !paused) {
     const basis = cameraBasis();
     samples = gpuRenderer.render({
       position: camera.position,
@@ -826,23 +832,67 @@ function frame(now: number): void {
   requestAnimationFrame(frame);
 }
 
-async function initializeWebGpu(): Promise<void> {
-  if (!(navigator as Navigator & { gpu?: unknown }).gpu) return;
+function updateResolutionButton(): void {
+  if (resolutionButton) resolutionButton.textContent = `${renderSize}×${renderSize}`;
+}
+
+function resizeCpuRenderer(resolution: RenderResolution): void {
+  renderSize = resolution;
+  canvas.width = renderSize;
+  canvas.height = renderSize;
+  context.imageSmoothingEnabled = false;
+  image = context.createImageData(renderSize, renderSize);
+  accumulation = new Float32Array(renderSize * renderSize * 3);
+  resolved = new Float32Array(renderSize * renderSize * 3);
+  denoisedA = new Float32Array(renderSize * renderSize * 3);
+  denoisedB = new Float32Array(renderSize * renderSize * 3);
+  samples = 0;
+  cameraDirty = true;
+  updateResolutionButton();
+  fitCanvas();
+}
+
+async function initializeWebGpu(resolution: RenderResolution = renderSize): Promise<boolean> {
+  if (!(navigator as Navigator & { gpu?: unknown }).gpu || resolutionChanging) return false;
+  resolutionChanging = true;
+  if (resolutionButton) resolutionButton.disabled = true;
+  const previousCanvas = canvas;
   const gpuCanvas = canvas.cloneNode(true) as HTMLCanvasElement;
-  gpuCanvas.width = WIDTH;
-  gpuCanvas.height = HEIGHT;
+  gpuCanvas.width = resolution;
+  gpuCanvas.height = resolution;
 
   try {
-    const packedScene = packMeshScene(dungeonScene);
-    const renderer = await createWebGpuRenderer(gpuCanvas, packedScene, staticLights);
-    if (!renderer) return;
-    canvas.replaceWith(gpuCanvas);
+    packedSceneCache ??= packMeshScene(dungeonScene);
+    const renderer = await createWebGpuRenderer(gpuCanvas, packedSceneCache, staticLights, resolution);
+    if (!renderer) return false;
+    const previousRenderer = gpuRenderer;
+    previousCanvas.replaceWith(gpuCanvas);
     canvas = gpuCanvas;
     gpuRenderer = renderer;
+    renderSize = resolution;
+    samples = 0;
     cameraDirty = true;
+    previousRenderer?.destroy();
+    updateResolutionButton();
     fitCanvas();
+    return true;
   } catch (error) {
     console.warn("WebGPU non disponibile, mantengo il renderer CPU.", error);
+    return false;
+  } finally {
+    resolutionChanging = false;
+    if (resolutionButton) resolutionButton.disabled = false;
+  }
+}
+
+async function cycleResolution(): Promise<void> {
+  if (resolutionChanging) return;
+  const currentIndex = RESOLUTIONS.indexOf(renderSize);
+  const nextResolution = RESOLUTIONS[(currentIndex + 1) % RESOLUTIONS.length] ?? 64;
+  if (gpuRenderer) {
+    await initializeWebGpu(nextResolution);
+  } else {
+    resizeCpuRenderer(nextResolution);
   }
 }
 
@@ -863,12 +913,13 @@ function restart(): void {
 
 function fitCanvas(): void {
   const available = Math.max(64, Math.min(window.innerWidth - 28, window.innerHeight - 150));
-  const displaySize = Math.max(1, Math.floor(available / WIDTH)) * WIDTH;
+  const displaySize = Math.max(1, Math.floor(available / renderSize)) * renderSize;
   canvas.style.width = `${displaySize}px`;
   canvas.style.height = `${displaySize}px`;
 }
 
 window.addEventListener("resize", fitCanvas);
+resolutionButton?.addEventListener("click", () => void cycleResolution());
 window.addEventListener("keydown", (event) => {
   const handled = [
     "KeyW", "KeyS", "KeyA", "KeyD", "KeyQ", "KeyE",
@@ -888,6 +939,7 @@ window.addEventListener("keydown", (event) => {
 });
 
 fitCanvas();
+updateResolutionButton();
 updateHud(performance.now());
 requestAnimationFrame(frame);
 void initializeWebGpu();

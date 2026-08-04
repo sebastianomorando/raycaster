@@ -1,7 +1,7 @@
 # Dungeon 64
 
 Un piccolo dungeon crawler first-person a griglia, renderizzato da un ray tracer
-CPU progressivo in un framebuffer reale da 64×64 pixel.
+CPU progressivo in un framebuffer quadrato a risoluzione selezionabile.
 
 Include sfere e piano, materiali diffusi/metallici/dielettrici, ombre morbide,
 riflessioni, rifrazioni, profondità di campo e accumulo progressivo dei campioni.
@@ -43,7 +43,9 @@ bun run build
 ```
 
 Controlli: `W/S` avanti e indietro, `A/D` rotazione di 90°, `Q/E` strafing,
-frecce come alternativa, `Spazio` per la pausa e `R` per ricominciare.
+frecce come alternativa, `Spazio` per la pausa e `R` per ricominciare. Il pulsante
+nella barra superiore cambia ciclicamente la risoluzione interna tra 32×32, 64×64,
+128×128 e 256×256, mantenendo sempre l'output pixel-perfect.
 
 This project was created using `bun init` in bun v1.3.14. [Bun](https://bun.com) is a fast all-in-one JavaScript runtime.
 

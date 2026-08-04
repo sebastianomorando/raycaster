@@ -30,9 +30,6 @@ export type WebGpuRenderer = {
   destroy(): void;
 };
 
-const WIDTH = 64;
-const HEIGHT = 64;
-
 const computeShader = /* wgsl */ `
 struct Uniforms {
   cameraPosition: vec4f,
@@ -530,6 +527,7 @@ export async function createWebGpuRenderer(
   canvas: HTMLCanvasElement,
   scene: PackedGpuScene,
   staticLights: readonly GpuLightInput[],
+  resolution = 64,
 ): Promise<WebGpuRenderer | null> {
   const gpu = (navigator as Navigator & { gpu?: any }).gpu;
   if (!gpu) return null;
@@ -543,8 +541,10 @@ export async function createWebGpuRenderer(
   const bufferUsage = (globalThis as any).GPUBufferUsage;
   const textureUsage = (globalThis as any).GPUTextureUsage;
   const format = gpu.getPreferredCanvasFormat();
-  canvas.width = WIDTH;
-  canvas.height = HEIGHT;
+  const width = resolution;
+  const height = resolution;
+  canvas.width = width;
+  canvas.height = height;
   context.configure({ device, format, alphaMode: "opaque" });
 
   const uniformBuffer = device.createBuffer({
@@ -558,15 +558,15 @@ export async function createWebGpuRenderer(
   const tlasBuffer = createDataBuffer(device, scene.tlasNodes, bufferUsage.STORAGE);
   const lightsBuffer = createDataBuffer(device, packLights(staticLights), bufferUsage.STORAGE);
   const accumulationBuffer = device.createBuffer({
-    size: WIDTH * HEIGHT * 16,
+    size: width * height * 16,
     usage: bufferUsage.STORAGE,
   });
   const denoisedBuffer = device.createBuffer({
-    size: WIDTH * HEIGHT * 16,
+    size: width * height * 16,
     usage: bufferUsage.STORAGE,
   });
   const outputTexture = device.createTexture({
-    size: [WIDTH, HEIGHT],
+    size: [width, height],
     format: "rgba8unorm",
     usage: textureUsage.STORAGE_BINDING | textureUsage.TEXTURE_BINDING,
   });
@@ -656,7 +656,9 @@ export async function createWebGpuRenderer(
 
   return {
     render(frame: GpuFrame): number {
-      const samplesThisFrame = frame.moving ? 2 : 4;
+      const samplesThisFrame = frame.moving
+        ? (resolution <= 64 ? 2 : 1)
+        : (resolution === 32 ? 8 : resolution === 64 ? 4 : 1);
       if (frame.reset) accumulatedSamples = 0;
       const uniforms = new ArrayBuffer(128);
       const floats = new Float32Array(uniforms);
@@ -673,8 +675,8 @@ export async function createWebGpuRenderer(
       writeVector(12, frame.up);
       writeVector(16, frame.playerLightPosition);
       writeVector(20, frame.playerLightColor, frame.playerLightIntensity);
-      uints[24] = WIDTH;
-      uints[25] = HEIGHT;
+      uints[24] = width;
+      uints[25] = height;
       uints[26] = samplesThisFrame;
       uints[27] = frame.reset ? 1 : 0;
       floats[28] = frame.time;
@@ -687,19 +689,19 @@ export async function createWebGpuRenderer(
       const computePass = encoder.beginComputePass();
       computePass.setPipeline(computePipeline);
       computePass.setBindGroup(0, computeBindGroup);
-      computePass.dispatchWorkgroups(Math.ceil(WIDTH / 8), Math.ceil(HEIGHT / 8));
+      computePass.dispatchWorkgroups(Math.ceil(width / 8), Math.ceil(height / 8));
       computePass.end();
 
       const horizontalPass = encoder.beginComputePass();
       horizontalPass.setPipeline(horizontalPipeline);
       horizontalPass.setBindGroup(0, horizontalBindGroup);
-      horizontalPass.dispatchWorkgroups(Math.ceil(WIDTH / 8), Math.ceil(HEIGHT / 8));
+      horizontalPass.dispatchWorkgroups(Math.ceil(width / 8), Math.ceil(height / 8));
       horizontalPass.end();
 
       const verticalPass = encoder.beginComputePass();
       verticalPass.setPipeline(verticalPipeline);
       verticalPass.setBindGroup(0, verticalBindGroup);
-      verticalPass.dispatchWorkgroups(Math.ceil(WIDTH / 8), Math.ceil(HEIGHT / 8));
+      verticalPass.dispatchWorkgroups(Math.ceil(width / 8), Math.ceil(height / 8));
       verticalPass.end();
 
       const renderPass = encoder.beginRenderPass({
@@ -719,8 +721,15 @@ export async function createWebGpuRenderer(
       return accumulatedSamples;
     },
     destroy(): void {
-      for (const resource of resources) resource.destroy?.();
-      device.destroy();
+      // A resolution switch can happen while the previous frame is still queued.
+      // Releasing its buffers immediately produces validation errors (and crashes
+      // some WebGPU implementations), so retire the device only once it is idle.
+      void device.queue.onSubmittedWorkDone().then(() => {
+        for (const resource of resources) resource.destroy?.();
+        device.destroy();
+      }).catch(() => {
+        device.destroy();
+      });
     },
   };
 }

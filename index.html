@@ -51,6 +51,37 @@
         letter-spacing: 0.16em;
       }
 
+      .title-actions {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      #resolution {
+        min-width: 58px;
+        padding: 3px 6px;
+        border: 1px solid #67462b;
+        border-radius: 0;
+        background: #160e09;
+        color: #d99b45;
+        font: inherit;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        cursor: pointer;
+      }
+
+      #resolution:hover,
+      #resolution:focus-visible {
+        border-color: #b67a3a;
+        background: #28170d;
+        outline: none;
+      }
+
+      #resolution:disabled {
+        color: #594936;
+        cursor: wait;
+      }
+
       .frame {
         position: relative;
         border: 1px solid #67462b;
@@ -127,7 +158,10 @@
     <main>
       <div class="titlebar">
         <strong>Dungeon 64</strong>
-        <span><span id="position">S · 1,1</span> · GI ×5</span>
+        <div class="title-actions">
+          <button id="resolution" type="button" title="Cambia risoluzione interna">64×64</button>
+          <span><span id="position">S · 1,1</span> · GI ×5</span>
+        </div>
       </div>
       <div class="frame">
         <canvas id="app" width="64" height="64" aria-label="Dungeon crawler ray traced"></canvas>
