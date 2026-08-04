@@ -21,6 +21,8 @@ leggibilità nei passaggi non illuminati.
 Quando WebGPU è disponibile, triangoli, materiali, BLAS, TLAS e luci vengono
 caricati in storage buffer e il path tracing viene eseguito da un compute shader
 WGSL. Il renderer TypeScript CPU rimane disponibile come fallback automatico.
+Un denoise bilaterale separabile in due compute pass filtra i primi campioni e si
+ritira progressivamente entro 24 spp, mantenendo più stabile il movimento.
 
 To install dependencies:
 

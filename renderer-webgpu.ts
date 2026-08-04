@@ -102,7 +102,6 @@ struct TriangleHit {
 @group(0) @binding(5) var<storage, read> tlasNodes: array<BvhNode>;
 @group(0) @binding(6) var<storage, read> lights: array<Light>;
 @group(0) @binding(7) var<storage, read_write> accumulation: array<vec4f>;
-@group(0) @binding(8) var outputTexture: texture_storage_2d<rgba8unorm, write>;
 
 const EPSILON = 0.001;
 const PI = 3.14159265359;
@@ -364,16 +363,6 @@ fn trace(initialOrigin: vec3f, initialDirection: vec3f, state: ptr<function, u32
   return radiance;
 }
 
-fn toneMap(color: vec3f) -> vec3f {
-  let exposed = color * 1.35;
-  let mapped = clamp(
-    exposed * (2.51 * exposed + vec3f(0.03)) /
-    (exposed * (2.43 * exposed + vec3f(0.59)) + vec3f(0.14)),
-    vec3f(0.0), vec3f(1.0)
-  );
-  return sqrt(mapped);
-}
-
 @compute @workgroup_size(8, 8)
 fn main(@builtin(global_invocation_id) id: vec3u) {
   if (id.x >= uniforms.frameInfo.x || id.y >= uniforms.frameInfo.y) { return; }
@@ -403,8 +392,91 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     previous.w + f32(uniforms.frameInfo.z)
   );
   accumulation[pixel] = accumulated;
-  let color = toneMap(accumulated.xyz / max(1.0, accumulated.w));
-  textureStore(outputTexture, vec2i(id.xy), vec4f(color, 1.0));
+}
+`;
+
+const denoiseShader = /* wgsl */ `
+struct Uniforms {
+  cameraPosition: vec4f,
+  cameraForward: vec4f,
+  cameraRight: vec4f,
+  cameraUp: vec4f,
+  playerLightPosition: vec4f,
+  playerLightColorIntensity: vec4f,
+  frameInfo: vec4u,
+  renderInfo: vec4f,
+}
+
+@group(0) @binding(0) var<uniform> uniforms: Uniforms;
+@group(0) @binding(1) var<storage, read> accumulation: array<vec4f>;
+@group(0) @binding(2) var<storage, read_write> intermediate: array<vec4f>;
+@group(0) @binding(3) var outputTexture: texture_storage_2d<rgba8unorm, write>;
+
+fn accumulatedColor(index: u32) -> vec4f {
+  let value = accumulation[index];
+  return vec4f(value.xyz / max(1.0, value.w), value.w);
+}
+
+fn spatialWeight(offset: i32) -> f32 {
+  if (offset == 0) { return 4.0; }
+  if (abs(offset) == 1) { return 2.0; }
+  return 1.0;
+}
+
+fn bilateralWeight(center: vec3f, sample: vec3f, spatial: f32, sigma: f32) -> f32 {
+  let difference = sample - center;
+  return spatial * exp(-dot(difference, difference) / max(0.001, sigma * sigma));
+}
+
+fn toneMap(color: vec3f) -> vec3f {
+  let exposed = color * 1.35;
+  let mapped = clamp(
+    exposed * (2.51 * exposed + vec3f(0.03)) /
+    (exposed * (2.43 * exposed + vec3f(0.59)) + vec3f(0.14)),
+    vec3f(0.0), vec3f(1.0)
+  );
+  return sqrt(mapped);
+}
+
+@compute @workgroup_size(8, 8)
+fn horizontal(@builtin(global_invocation_id) id: vec3u) {
+  if (id.x >= uniforms.frameInfo.x || id.y >= uniforms.frameInfo.y) { return; }
+  let pixel = id.y * uniforms.frameInfo.x + id.x;
+  let center = accumulatedColor(pixel);
+  let convergence = clamp(center.w / 20.0, 0.0, 1.0);
+  let sigma = mix(1.6, 0.42, convergence);
+  var color = vec3f(0.0);
+  var totalWeight = 0.0;
+  for (var offset = -2i; offset <= 2i; offset += 1i) {
+    let sampleX = u32(clamp(i32(id.x) + offset, 0i, i32(uniforms.frameInfo.x) - 1i));
+    let sample = accumulatedColor(id.y * uniforms.frameInfo.x + sampleX);
+    let weight = bilateralWeight(center.xyz, sample.xyz, spatialWeight(offset), sigma);
+    color += sample.xyz * weight;
+    totalWeight += weight;
+  }
+  intermediate[pixel] = vec4f(color / max(totalWeight, 0.00001), center.w);
+}
+
+@compute @workgroup_size(8, 8)
+fn vertical(@builtin(global_invocation_id) id: vec3u) {
+  if (id.x >= uniforms.frameInfo.x || id.y >= uniforms.frameInfo.y) { return; }
+  let pixel = id.y * uniforms.frameInfo.x + id.x;
+  let original = accumulatedColor(pixel);
+  let center = intermediate[pixel];
+  let convergence = clamp(center.w / 20.0, 0.0, 1.0);
+  let sigma = mix(1.6, 0.42, convergence);
+  var color = vec3f(0.0);
+  var totalWeight = 0.0;
+  for (var offset = -2i; offset <= 2i; offset += 1i) {
+    let sampleY = u32(clamp(i32(id.y) + offset, 0i, i32(uniforms.frameInfo.y) - 1i));
+    let sample = intermediate[sampleY * uniforms.frameInfo.x + id.x];
+    let weight = bilateralWeight(center.xyz, sample.xyz, spatialWeight(offset), sigma);
+    color += sample.xyz * weight;
+    totalWeight += weight;
+  }
+  let filtered = color / max(totalWeight, 0.00001);
+  let strength = clamp(1.0 - original.w / 24.0, 0.0, 1.0);
+  textureStore(outputTexture, vec2i(id.xy), vec4f(toneMap(mix(original.xyz, filtered, strength)), 1.0));
 }
 `;
 
@@ -489,6 +561,10 @@ export async function createWebGpuRenderer(
     size: WIDTH * HEIGHT * 16,
     usage: bufferUsage.STORAGE,
   });
+  const denoisedBuffer = device.createBuffer({
+    size: WIDTH * HEIGHT * 16,
+    usage: bufferUsage.STORAGE,
+  });
   const outputTexture = device.createTexture({
     size: [WIDTH, HEIGHT],
     format: "rgba8unorm",
@@ -517,7 +593,40 @@ export async function createWebGpuRenderer(
       { binding: 5, resource: { buffer: tlasBuffer } },
       { binding: 6, resource: { buffer: lightsBuffer } },
       { binding: 7, resource: { buffer: accumulationBuffer } },
-      { binding: 8, resource: outputTexture.createView() },
+    ],
+  });
+
+  const denoiseModule = device.createShaderModule({ label: "Dungeon denoiser", code: denoiseShader });
+  const denoiseCompilation = await denoiseModule.getCompilationInfo?.();
+  const denoiseErrors = denoiseCompilation?.messages?.filter((message: any) => message.type === "error") ?? [];
+  if (denoiseErrors.length > 0) {
+    throw new Error(`WGSL denoise:\n${denoiseErrors.map((message: any) => message.message).join("\n")}`);
+  }
+  const horizontalPipeline = await device.createComputePipelineAsync({
+    label: "Dungeon horizontal denoise",
+    layout: "auto",
+    compute: { module: denoiseModule, entryPoint: "horizontal" },
+  });
+  const verticalPipeline = await device.createComputePipelineAsync({
+    label: "Dungeon vertical denoise",
+    layout: "auto",
+    compute: { module: denoiseModule, entryPoint: "vertical" },
+  });
+  const horizontalBindGroup = device.createBindGroup({
+    layout: horizontalPipeline.getBindGroupLayout(0),
+    entries: [
+      { binding: 0, resource: { buffer: uniformBuffer } },
+      { binding: 1, resource: { buffer: accumulationBuffer } },
+      { binding: 2, resource: { buffer: denoisedBuffer } },
+    ],
+  });
+  const verticalBindGroup = device.createBindGroup({
+    layout: verticalPipeline.getBindGroupLayout(0),
+    entries: [
+      { binding: 0, resource: { buffer: uniformBuffer } },
+      { binding: 1, resource: { buffer: accumulationBuffer } },
+      { binding: 2, resource: { buffer: denoisedBuffer } },
+      { binding: 3, resource: outputTexture.createView() },
     ],
   });
 
@@ -541,13 +650,13 @@ export async function createWebGpuRenderer(
 
   const resources = [
     uniformBuffer, trianglesBuffer, materialsBuffer, blasBuffer, instancesBuffer,
-    tlasBuffer, lightsBuffer, accumulationBuffer, outputTexture,
+    tlasBuffer, lightsBuffer, accumulationBuffer, denoisedBuffer, outputTexture,
   ];
   let accumulatedSamples = 0;
 
   return {
     render(frame: GpuFrame): number {
-      const samplesThisFrame = frame.moving ? 1 : 4;
+      const samplesThisFrame = frame.moving ? 2 : 4;
       if (frame.reset) accumulatedSamples = 0;
       const uniforms = new ArrayBuffer(128);
       const floats = new Float32Array(uniforms);
@@ -580,6 +689,18 @@ export async function createWebGpuRenderer(
       computePass.setBindGroup(0, computeBindGroup);
       computePass.dispatchWorkgroups(Math.ceil(WIDTH / 8), Math.ceil(HEIGHT / 8));
       computePass.end();
+
+      const horizontalPass = encoder.beginComputePass();
+      horizontalPass.setPipeline(horizontalPipeline);
+      horizontalPass.setBindGroup(0, horizontalBindGroup);
+      horizontalPass.dispatchWorkgroups(Math.ceil(WIDTH / 8), Math.ceil(HEIGHT / 8));
+      horizontalPass.end();
+
+      const verticalPass = encoder.beginComputePass();
+      verticalPass.setPipeline(verticalPipeline);
+      verticalPass.setBindGroup(0, verticalBindGroup);
+      verticalPass.dispatchWorkgroups(Math.ceil(WIDTH / 8), Math.ceil(HEIGHT / 8));
+      verticalPass.end();
 
       const renderPass = encoder.beginRenderPass({
         colorAttachments: [{
