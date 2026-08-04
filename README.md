@@ -14,6 +14,12 @@ Il livello usa istanze dei modelli OBJ `Wall_Modular`, `Floor_Modular`, `Arch`,
 `Skeleton` e `Slime`. Le mesh hanno una propria BVH e le istanze sono raccolte in
 una seconda BVH di scena.
 
+I PNG trasparenti della cartella `fantasycharacters` possono essere usati come
+impostori prospettici: vengono proiettati su un canvas sovrapposto, scalati con la
+distanza, mantenuti frontali alla camera e verificati per colonne contro la geometria,
+così muri e oggetti possono occultarli. La scena include esempi con imp, fantasma,
+demone del magma e lich.
+
 Falò e torce hanno geometria emissiva e luci campionate per importanza. La luce
 diretta viene valutata a ogni rimbalzo diffuso, producendo illuminazione globale,
 ombre morbide e color bleeding; una debole lanterna del giocatore garantisce la

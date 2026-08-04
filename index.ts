@@ -3,6 +3,10 @@ import batSource from "./Monsters/OBJ/Bat.obj" with { type: "text" };
 import chestSource from "./ModularDungeon/OBJ/Chest.obj" with { type: "text" };
 import columnSource from "./ModularDungeon/OBJ/Column.obj" with { type: "text" };
 import dragonSource from "./Monsters/OBJ/Dragon.obj" with { type: "text" };
+import ghostImpostorUrl from "./fantasycharacters/FantasyCharacters_ghost.png";
+import impImpostorUrl from "./fantasycharacters/FantasyCharacters_imp.png";
+import lichImpostorUrl from "./fantasycharacters/FantasyCharacters_lich.png";
+import magmaDemonImpostorUrl from "./fantasycharacters/FantasyCharacters_magma_demon.png";
 import spiderSource from "./EasyEnemies/OBJ/Spider.obj" with { type: "text" };
 import floorSource from "./ModularDungeon/OBJ/Floor_Modular.obj" with { type: "text" };
 import skeletonSource from "./Monsters/OBJ/Skeleton.obj" with { type: "text" };
@@ -87,6 +91,15 @@ type ViewSnap = {
   fromFov: number;
   toYaw: number;
 };
+
+type ImpostorPlacement = Readonly<{
+  source: string;
+  column: number;
+  row: number;
+  height: number;
+}>;
+
+type Impostor = ImpostorPlacement & Readonly<{ image: HTMLImageElement }>;
 
 type SceneLight = {
   position: Vec3;
@@ -279,6 +292,13 @@ const monsterPlacements = [
   { mesh: skeletonMesh, column: 7, row: 9, offset: v(0, -0.03, 0), scale: 0.31, rotation: -Math.PI / 2 },
   { mesh: dragonMesh, column: 12, row: 13, offset: v(0, 0, 0), scale: 0.38, rotation: -Math.PI / 2 },
 ] as const;
+
+const impostorPlacements: readonly ImpostorPlacement[] = [
+  { source: impImpostorUrl, column: 2, row: 3, height: 1.25 },
+  { source: ghostImpostorUrl, column: 13, row: 6, height: 1.5 },
+  { source: magmaDemonImpostorUrl, column: 9, row: 5, height: 1.55 },
+  { source: lichImpostorUrl, column: 8, row: 13, height: 1.5 },
+];
 
 const torchPlacements = [
   { column: 5, row: 2, offset: v(0.9, 0.78, 0), lightOffset: v(0.64, 1.25, 0), rotation: Math.PI / 2 },
@@ -582,6 +602,7 @@ function trace(initialRay: Ray): Vec3 {
 }
 
 const canvasElement = document.querySelector<HTMLCanvasElement>("#app");
+const impostorCanvas = document.querySelector<HTMLCanvasElement>("#impostors");
 const sampleLabel = document.querySelector<HTMLElement>("#samples");
 const messageLabel = document.querySelector<HTMLElement>("#message");
 const positionLabel = document.querySelector<HTMLElement>("#position");
@@ -589,8 +610,10 @@ const healthLabel = document.querySelector<HTMLElement>("#health");
 const resolutionButton = document.querySelector<HTMLButtonElement>("#resolution");
 const frameElement = document.querySelector<HTMLElement>(".frame");
 if (!canvasElement) throw new Error("Canvas #app non trovato");
+if (!impostorCanvas) throw new Error("Canvas #impostors non trovato");
 if (!frameElement) throw new Error("Contenitore .frame non trovato");
 const viewFrame = frameElement;
+const spriteCanvas = impostorCanvas;
 let canvas = canvasElement;
 canvas.width = renderSize;
 canvas.height = renderSize;
@@ -599,6 +622,17 @@ const canvasContext = canvas.getContext("2d", { alpha: false });
 if (!canvasContext) throw new Error("Contesto 2D non disponibile");
 const context = canvasContext;
 context.imageSmoothingEnabled = false;
+const impostorContextValue = spriteCanvas.getContext("2d");
+if (!impostorContextValue) throw new Error("Contesto impostori 2D non disponibile");
+const impostorContext = impostorContextValue;
+impostorContext.imageSmoothingEnabled = true;
+
+const impostors: readonly Impostor[] = impostorPlacements.map((placement) => {
+  const image = new Image();
+  image.decoding = "async";
+  image.src = placement.source;
+  return { ...placement, image };
+});
 
 let image = context.createImageData(renderSize, renderSize);
 let accumulation = new Float32Array(renderSize * renderSize * 3);
@@ -645,6 +679,86 @@ function cameraBasis(): { forward: Vec3; right: Vec3; up: Vec3 } {
   ));
   const right = normalize(cross(forward, v(0, 1, 0)));
   return { forward, right, up: normalize(cross(right, forward)) };
+}
+
+function projectPoint(
+  point: Vec3,
+  { forward, right, up }: ReturnType<typeof cameraBasis>,
+): { x: number; y: number; depth: number } | null {
+  const relative = sub(point, camera.position);
+  const depth = dot(relative, forward);
+  if (depth <= 0.03) return null;
+  const scale = Math.tan(camera.fov * 0.5);
+  return {
+    x: (0.5 + dot(relative, right) / (depth * scale * 2)) * renderSize,
+    y: (0.5 - dot(relative, up) / (depth * scale * 2)) * renderSize,
+    depth,
+  };
+}
+
+function renderImpostors(): void {
+  impostorContext.clearRect(0, 0, renderSize, renderSize);
+  const basis = cameraBasis();
+  const projected = impostors.flatMap((impostor) => {
+    if (!impostor.image.complete || impostor.image.naturalWidth === 0) return [];
+    const base = add(cellPosition(impostor.column, impostor.row), v(0, 0.015, 0));
+    const center = add(base, v(0, impostor.height * 0.5, 0));
+    const centerOnScreen = projectPoint(center, basis);
+    const topOnScreen = projectPoint(add(base, v(0, impostor.height, 0)), basis);
+    const bottomOnScreen = projectPoint(base, basis);
+    if (!centerOnScreen || !topOnScreen || !bottomOnScreen) return [];
+    const height = Math.abs(bottomOnScreen.y - topOnScreen.y);
+    const width = height * (impostor.image.naturalWidth / impostor.image.naturalHeight);
+    if (height < 0.5 || centerOnScreen.x + width < 0 || centerOnScreen.x - width > renderSize) return [];
+    return [{
+      image: impostor.image,
+      center,
+      depth: centerOnScreen.depth,
+      x: centerOnScreen.x - width * 0.5,
+      centerY: centerOnScreen.y,
+      y: Math.min(topOnScreen.y, bottomOnScreen.y),
+      width,
+      height,
+    }];
+  }).sort((left, right) => right.depth - left.depth);
+
+  for (const impostor of projected) {
+    const brightness = Math.max(0.42, Math.min(0.88, 0.96 - impostor.depth * 0.035));
+    impostorContext.filter = `brightness(${brightness}) saturate(0.88)`;
+    const firstColumn = Math.max(0, Math.floor(impostor.x));
+    const lastColumn = Math.min(renderSize, Math.ceil(impostor.x + impostor.width));
+    const planeNormal = normalize(v(
+      camera.position.x - impostor.center.x,
+      0,
+      camera.position.z - impostor.center.z,
+    ));
+    const planeDistance = dot(sub(impostor.center, camera.position), planeNormal);
+
+    for (let column = firstColumn; column < lastColumn; column += 1) {
+      const ray = cameraRay(column, impostor.centerY - 0.5, basis, true);
+      const denominator = dot(ray.direction, planeNormal);
+      if (Math.abs(denominator) < 1e-5) continue;
+      const spriteDistance = planeDistance / denominator;
+      if (spriteDistance <= EPSILON) continue;
+      const blocker = sceneHit(ray, EPSILON, spriteDistance);
+      if (blocker && blocker.distance < spriteDistance - 0.025) continue;
+
+      const sourceX = ((column - impostor.x) / impostor.width) * impostor.image.naturalWidth;
+      const sourceWidth = impostor.image.naturalWidth / impostor.width;
+      impostorContext.drawImage(
+        impostor.image,
+        sourceX,
+        0,
+        sourceWidth,
+        impostor.image.naturalHeight,
+        column,
+        impostor.y,
+        1,
+        impostor.height,
+      );
+    }
+  }
+  impostorContext.filter = "none";
 }
 
 function cameraRay(
@@ -954,6 +1068,7 @@ function frame(now: number): void {
   } else if (sampleLabel) {
     sampleLabel.textContent = `${samples} spp · pausa`;
   }
+  renderImpostors();
   requestAnimationFrame(frame);
 }
 
@@ -965,7 +1080,10 @@ function resizeCpuRenderer(resolution: RenderResolution): void {
   renderSize = resolution;
   canvas.width = renderSize;
   canvas.height = renderSize;
+  spriteCanvas.width = renderSize;
+  spriteCanvas.height = renderSize;
   context.imageSmoothingEnabled = false;
+  impostorContext.imageSmoothingEnabled = true;
   image = context.createImageData(renderSize, renderSize);
   accumulation = new Float32Array(renderSize * renderSize * 3);
   resolved = new Float32Array(renderSize * renderSize * 3);
@@ -995,6 +1113,9 @@ async function initializeWebGpu(resolution: RenderResolution = renderSize): Prom
     canvas = gpuCanvas;
     gpuRenderer = renderer;
     renderSize = resolution;
+    spriteCanvas.width = renderSize;
+    spriteCanvas.height = renderSize;
+    impostorContext.imageSmoothingEnabled = true;
     samples = 0;
     cameraDirty = true;
     previousRenderer?.destroy();
@@ -1044,6 +1165,8 @@ function fitCanvas(): void {
   const displaySize = Math.max(1, Math.floor(available / renderSize)) * renderSize;
   canvas.style.width = `${displaySize}px`;
   canvas.style.height = `${displaySize}px`;
+  spriteCanvas.style.width = `${displaySize}px`;
+  spriteCanvas.style.height = `${displaySize}px`;
 }
 
 window.addEventListener("resize", fitCanvas);
