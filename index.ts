@@ -1,7 +1,12 @@
 import archSource from "./ModularDungeon/OBJ/Arch.obj" with { type: "text" };
+import batSource from "./Monsters/OBJ/Bat.obj" with { type: "text" };
 import chestSource from "./ModularDungeon/OBJ/Chest.obj" with { type: "text" };
 import columnSource from "./ModularDungeon/OBJ/Column.obj" with { type: "text" };
+import dragonSource from "./Monsters/OBJ/Dragon.obj" with { type: "text" };
+import spiderSource from "./EasyEnemies/OBJ/Spider.obj" with { type: "text" };
 import floorSource from "./ModularDungeon/OBJ/Floor_Modular.obj" with { type: "text" };
+import skeletonSource from "./Monsters/OBJ/Skeleton.obj" with { type: "text" };
+import slimeSource from "./Monsters/OBJ/Slime.obj" with { type: "text" };
 import spikesSource from "./ModularDungeon/OBJ/Trap_spikes.obj" with { type: "text" };
 import torchSource from "./ModularDungeon/OBJ/Torch.obj" with { type: "text" };
 import wallSource from "./ModularDungeon/OBJ/Wall_Modular.obj" with { type: "text" };
@@ -26,6 +31,13 @@ const MOTION_SAMPLES = 1;
 const DENOISE_UNTIL_SAMPLES = 20;
 const MOVE_DURATION = 210;
 const TURN_DURATION = 180;
+const VIEW_RESET_DURATION = 160;
+const LOOK_SENSITIVITY = 0.006;
+const MAX_LOOK_PITCH = 70 * (Math.PI / 180);
+const DEFAULT_FOV = 58 * (Math.PI / 180);
+const MIN_FOV = 30 * (Math.PI / 180);
+const MAX_FOV = 90 * (Math.PI / 180);
+const ZOOM_SENSITIVITY = 0.0008;
 const EPSILON = 0.001;
 
 type Vec3 = Readonly<{ x: number; y: number; z: number }>;
@@ -67,6 +79,14 @@ type ActiveAction =
       toYaw: number;
       targetFacing: number;
     };
+
+type ViewSnap = {
+  startedAt: number;
+  fromYaw: number;
+  fromPitch: number;
+  fromFov: number;
+  toYaw: number;
+};
 
 type SceneLight = {
   position: Vec3;
@@ -193,6 +213,36 @@ const columnMaterials = {
   Grey_Floor: { kind: "diffuse", color: v(0.17, 0.16, 0.21) },
 } satisfies Record<string, Material>;
 
+const spiderMaterials = {
+  Material: { kind: "diffuse", color: v(0.075, 0.045, 0.032) },
+  "Material.001": { kind: "emissive", color: v(0.8, 0.012, 0.006), emission: 3.5 },
+} satisfies Record<string, Material>;
+
+const batMaterials = {
+  Belly: { kind: "diffuse", color: v(0.45, 0.24, 0.04) },
+  Black: { kind: "diffuse", color: v(0.012, 0.009, 0.016) },
+  Eyes: { kind: "emissive", color: v(0.65, 0.025, 0.008), emission: 2.5 },
+  Main: { kind: "diffuse", color: v(0.075, 0.025, 0.13) },
+  Nose: { kind: "diffuse", color: v(0.25, 0.045, 0.12) },
+} satisfies Record<string, Material>;
+
+const dragonMaterials = {
+  Belly: { kind: "diffuse", color: v(0.48, 0.27, 0.025) },
+  Claws: { kind: "metal", color: v(0.12, 0.11, 0.12), roughness: 0.32 },
+  Eyes: { kind: "emissive", color: v(0.9, 0.08, 0.008), emission: 3 },
+  Main: { kind: "diffuse", color: v(0.24, 0.025, 0.04) },
+  Wings: { kind: "diffuse", color: v(0.025, 0.018, 0.025) },
+} satisfies Record<string, Material>;
+
+const skeletonMaterials = {
+  Skeleton: { kind: "diffuse", color: v(0.55, 0.43, 0.27) },
+} satisfies Record<string, Material>;
+
+const slimeMaterials = {
+  Body: { kind: "diffuse", color: v(0.18, 0.68, 0.07) },
+  Eyes: { kind: "metal", color: v(0.025, 0.028, 0.032), roughness: 0.18 },
+} satisfies Record<string, Material>;
+
 function baseMesh(source: string, materials: Record<string, Material>, fallback: Material) {
   return createObjMesh(source, {
     translation: v(),
@@ -210,6 +260,25 @@ const spikesMesh = baseMesh(spikesSource, spikeMaterials, spikeMaterials.DarkMet
 const torchMesh = baseMesh(torchSource, fireMaterials, fireMaterials.DarkMetal);
 const woodfireMesh = baseMesh(woodfireSource, fireMaterials, fireMaterials.Wood);
 const columnMesh = baseMesh(columnSource, columnMaterials, columnMaterials.Grey_Floor);
+const spiderMesh = baseMesh(spiderSource, spiderMaterials, spiderMaterials.Material);
+const batMesh = baseMesh(batSource, batMaterials, batMaterials.Main);
+const dragonMesh = baseMesh(dragonSource, dragonMaterials, dragonMaterials.Main);
+const skeletonMesh = baseMesh(skeletonSource, skeletonMaterials, skeletonMaterials.Skeleton);
+const slimeMesh = baseMesh(slimeSource, slimeMaterials, slimeMaterials.Body);
+
+const spiderPlacement = {
+  column: 1,
+  row: 3,
+  scale: 0.26,
+  rotation: Math.PI,
+} as const;
+
+const monsterPlacements = [
+  { mesh: batMesh, column: 8, row: 3, offset: v(0, 0.62, 0), scale: 0.24, rotation: -Math.PI / 2 },
+  { mesh: slimeMesh, column: 7, row: 5, offset: v(0, 0.01, 0), scale: 0.32, rotation: -Math.PI / 2 },
+  { mesh: skeletonMesh, column: 7, row: 9, offset: v(0, -0.03, 0), scale: 0.31, rotation: -Math.PI / 2 },
+  { mesh: dragonMesh, column: 12, row: 13, offset: v(0, 0, 0), scale: 0.38, rotation: -Math.PI / 2 },
+] as const;
 
 const torchPlacements = [
   { column: 5, row: 2, offset: v(0.9, 0.78, 0), lightOffset: v(0.64, 1.25, 0), rotation: Math.PI / 2 },
@@ -268,6 +337,22 @@ function buildDungeon(): MeshInstance[] {
       columnMesh,
       cellPosition(columnCell.column, columnCell.row),
       0.49,
+    ));
+  }
+
+  instances.push(createMeshInstance(
+    spiderMesh,
+    add(cellPosition(spiderPlacement.column, spiderPlacement.row), v(0, 0.01, 0)),
+    spiderPlacement.scale,
+    spiderPlacement.rotation,
+  ));
+
+  for (const monster of monsterPlacements) {
+    instances.push(createMeshInstance(
+      monster.mesh,
+      add(cellPosition(monster.column, monster.row), monster.offset),
+      monster.scale,
+      monster.rotation,
     ));
   }
 
@@ -361,7 +446,8 @@ function schlick(cosine: number, ior: number): number {
 const camera = {
   position: cellPosition(startCell.column, startCell.row, EYE_HEIGHT),
   yaw: Math.PI,
-  fov: 58 * (Math.PI / 180),
+  pitch: 0,
+  fov: DEFAULT_FOV,
   aperture: 0.006,
   focusDistance: 4,
 };
@@ -501,7 +587,10 @@ const messageLabel = document.querySelector<HTMLElement>("#message");
 const positionLabel = document.querySelector<HTMLElement>("#position");
 const healthLabel = document.querySelector<HTMLElement>("#health");
 const resolutionButton = document.querySelector<HTMLButtonElement>("#resolution");
+const frameElement = document.querySelector<HTMLElement>(".frame");
 if (!canvasElement) throw new Error("Canvas #app non trovato");
+if (!frameElement) throw new Error("Contenitore .frame non trovato");
+const viewFrame = frameElement;
 let canvas = canvasElement;
 canvas.width = renderSize;
 canvas.height = renderSize;
@@ -528,6 +617,10 @@ const player = {
 const actionQueue: QueuedAction[] = [];
 const triggeredTraps = new Set<string>();
 let activeAction: ActiveAction | null = null;
+let viewSnap: ViewSnap | null = null;
+let lookPointerId: number | null = null;
+let lastLookX = 0;
+let lastLookY = 0;
 let statusMessage = "Trova il baule oltre il labirinto";
 let statusUntil = 0;
 let samples = 0;
@@ -544,9 +637,14 @@ function resetAccumulation(): void {
 }
 
 function cameraBasis(): { forward: Vec3; right: Vec3; up: Vec3 } {
-  const forward = normalize(v(Math.sin(camera.yaw), 0, -Math.cos(camera.yaw)));
+  const pitchCosine = Math.cos(camera.pitch);
+  const forward = normalize(v(
+    Math.sin(camera.yaw) * pitchCosine,
+    Math.sin(camera.pitch),
+    -Math.cos(camera.yaw) * pitchCosine,
+  ));
   const right = normalize(cross(forward, v(0, 1, 0)));
-  return { forward, right, up: v(0, 1, 0) };
+  return { forward, right, up: normalize(cross(right, forward)) };
 }
 
 function cameraRay(
@@ -706,7 +804,9 @@ function beginNextAction(now: number): void {
     return;
   }
 
-  const directionIndex = (player.facing + action.relativeDirection + 4) % 4;
+  const snappedTurns = Math.round(camera.yaw / (Math.PI / 2));
+  const targetFacing = ((snappedTurns % 4) + 4) % 4;
+  const directionIndex = (targetFacing + action.relativeDirection + 4) % 4;
   const direction = DIRECTIONS[directionIndex];
   if (!direction) return;
   const to = {
@@ -723,6 +823,14 @@ function beginNextAction(now: number): void {
     );
     return;
   }
+  player.facing = targetFacing;
+  viewSnap = {
+    startedAt: now,
+    fromYaw: camera.yaw,
+    fromPitch: camera.pitch,
+    fromFov: camera.fov,
+    toYaw: snappedTurns * (Math.PI / 2),
+  };
   activeAction = {
     kind: "move",
     startedAt: now,
@@ -748,8 +856,25 @@ function enteredCell(): void {
   }
 }
 
+function updateViewSnap(now: number): void {
+  if (!viewSnap) return;
+  const linearProgress = Math.min(1, (now - viewSnap.startedAt) / VIEW_RESET_DURATION);
+  const progress = ease(linearProgress);
+  camera.yaw = viewSnap.fromYaw + (viewSnap.toYaw - viewSnap.fromYaw) * progress;
+  camera.pitch = viewSnap.fromPitch * (1 - progress);
+  camera.fov = viewSnap.fromFov + (DEFAULT_FOV - viewSnap.fromFov) * progress;
+  markCameraChanged();
+
+  if (linearProgress < 1) return;
+  camera.yaw = viewSnap.toYaw;
+  camera.pitch = 0;
+  camera.fov = DEFAULT_FOV;
+  viewSnap = null;
+}
+
 function updateGame(now: number): void {
-  if (!activeAction) beginNextAction(now);
+  updateViewSnap(now);
+  if (!activeAction && lookPointerId === null && !viewSnap) beginNextAction(now);
   if (!activeAction) return;
 
   const duration = activeAction.kind === "move" ? MOVE_DURATION : TURN_DURATION;
@@ -905,8 +1030,11 @@ function restart(): void {
   triggeredTraps.clear();
   actionQueue.length = 0;
   activeAction = null;
+  viewSnap = null;
   camera.position = cellPosition(startCell.column, startCell.row, EYE_HEIGHT);
   camera.yaw = Math.PI;
+  camera.pitch = 0;
+  camera.fov = DEFAULT_FOV;
   showMessage("Trova il baule oltre il labirinto", 2200);
   markCameraChanged();
 }
@@ -920,6 +1048,54 @@ function fitCanvas(): void {
 
 window.addEventListener("resize", fitCanvas);
 resolutionButton?.addEventListener("click", () => void cycleResolution());
+
+viewFrame.addEventListener("pointerdown", (event) => {
+  if (event.button !== 0 || lookPointerId !== null || activeAction?.kind === "turn") return;
+  event.preventDefault();
+  lookPointerId = event.pointerId;
+  lastLookX = event.clientX;
+  lastLookY = event.clientY;
+  viewSnap = null;
+  viewFrame.classList.add("looking");
+  viewFrame.setPointerCapture(event.pointerId);
+});
+
+viewFrame.addEventListener("pointermove", (event) => {
+  if (event.pointerId !== lookPointerId) return;
+  const movementX = event.clientX - lastLookX;
+  const movementY = event.clientY - lastLookY;
+  lastLookX = event.clientX;
+  lastLookY = event.clientY;
+  camera.yaw += movementX * LOOK_SENSITIVITY;
+  camera.pitch = Math.max(
+    -MAX_LOOK_PITCH,
+    Math.min(MAX_LOOK_PITCH, camera.pitch - movementY * LOOK_SENSITIVITY),
+  );
+  markCameraChanged();
+});
+
+function finishMouseLook(event: PointerEvent): void {
+  if (event.pointerId !== lookPointerId) return;
+  lookPointerId = null;
+  viewFrame.classList.remove("looking");
+  if (viewFrame.hasPointerCapture(event.pointerId)) {
+    viewFrame.releasePointerCapture(event.pointerId);
+  }
+}
+
+viewFrame.addEventListener("pointerup", finishMouseLook);
+viewFrame.addEventListener("pointercancel", finishMouseLook);
+viewFrame.addEventListener("lostpointercapture", finishMouseLook);
+viewFrame.addEventListener("wheel", (event) => {
+  event.preventDefault();
+  viewSnap = null;
+  camera.fov = Math.max(
+    MIN_FOV,
+    Math.min(MAX_FOV, camera.fov + event.deltaY * ZOOM_SENSITIVITY),
+  );
+  markCameraChanged();
+}, { passive: false });
+
 window.addEventListener("keydown", (event) => {
   const handled = [
     "KeyW", "KeyS", "KeyA", "KeyD", "KeyQ", "KeyE",

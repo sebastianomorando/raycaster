@@ -10,8 +10,9 @@ stabili e un denoise edge-aware. Quando la camera si ferma continua ad accumular
 dallo stesso buffer e riduce gradualmente il filtro, senza cambio di renderer.
 
 Il livello usa istanze dei modelli OBJ `Wall_Modular`, `Floor_Modular`, `Arch`,
-`Chest`, `Trap_spikes`, `Column`, `Torch` e `Woodfire`. Le mesh hanno una propria
-BVH e le istanze sono raccolte in una seconda BVH di scena.
+`Chest`, `Trap_spikes`, `Column`, `Torch`, `Woodfire`, `Spider`, `Bat`, `Dragon`,
+`Skeleton` e `Slime`. Le mesh hanno una propria BVH e le istanze sono raccolte in
+una seconda BVH di scena.
 
 Falò e torce hanno geometria emissiva e luci campionate per importanza. La luce
 diretta viene valutata a ogni rimbalzo diffuso, producendo illuminazione globale,
@@ -43,11 +44,14 @@ bun run build
 ```
 
 Controlli: `W/S` avanti e indietro, `A/D` rotazione di 90°, `Q/E` strafing,
-frecce come alternativa, `Spazio` per la pausa e `R` per ricominciare. Il pulsante
+frecce come alternativa, trascinamento con il pulsante del mouse premuto per guardarsi
+liberamente intorno e rotellina per lo zoom. La visuale e lo zoom rimangono impostati
+finché non ci si sposta, quindi tornano all'orientamento cardinale più vicino e allo
+zoom normale. `Spazio` mette in pausa e `R` fa ricominciare. Il pulsante
 nella barra superiore cambia ciclicamente la risoluzione interna tra 32×32, 64×64,
 128×128 e 256×256, mantenendo sempre l'output pixel-perfect.
 
 This project was created using `bun init` in bun v1.3.14. [Bun](https://bun.com) is a fast all-in-one JavaScript runtime.
 
-Inserire nella cartella ModularDungeon i modelli OBJ e le texture del livello. Presi da LowPoly Models by @Quaternius
+Inserire nelle cartelle ModularDungeon, EasyEnemies e Monsters i modelli OBJ del livello. Presi da LowPoly Models by @Quaternius
 https://quaternius.com/packs/modulardungeon.html

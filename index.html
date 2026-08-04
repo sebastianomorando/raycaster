@@ -87,7 +87,11 @@
         border: 1px solid #67462b;
         background: #000;
         box-shadow: 0 22px 90px #000, 0 0 0 4px #160e09;
+        cursor: grab;
+        touch-action: none;
       }
+
+      .frame.looking { cursor: grabbing; }
 
       canvas {
         display: block;
@@ -174,7 +178,7 @@
       </div>
     </main>
     <div class="help">
-      W/S muovi · A/D gira 90° · Q/E strafing · frecce supportate · R ricomincia
+      Trascina per guardarti intorno · Rotellina zoom · W/S muovi · A/D gira 90° · Q/E strafing · R ricomincia
     </div>
     <script type="module" src="./index.ts"></script>
   </body>
