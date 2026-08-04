@@ -1,8 +1,28 @@
+import archSource from "./ModularDungeon/OBJ/Arch.obj" with { type: "text" };
+import chestSource from "./ModularDungeon/OBJ/Chest.obj" with { type: "text" };
+import columnSource from "./ModularDungeon/OBJ/Column.obj" with { type: "text" };
+import floorSource from "./ModularDungeon/OBJ/Floor_Modular.obj" with { type: "text" };
+import spikesSource from "./ModularDungeon/OBJ/Trap_spikes.obj" with { type: "text" };
+import torchSource from "./ModularDungeon/OBJ/Torch.obj" with { type: "text" };
+import wallSource from "./ModularDungeon/OBJ/Wall_Modular.obj" with { type: "text" };
+import woodfireSource from "./ModularDungeon/OBJ/Woodfire.obj" with { type: "text" };
+import {
+  createMeshInstance,
+  createMeshScene,
+  createObjMesh,
+  hitMeshScene,
+  type MeshInstance,
+} from "./mesh.ts";
+
 const WIDTH = 64;
 const HEIGHT = 64;
+const TILE_SIZE = 2;
+const EYE_HEIGHT = 0.68;
 const MAX_BOUNCES = 5;
-const MOTION_SAMPLES = 15;
-const DENOISE_UNTIL_SAMPLES = 24;
+const MOTION_SAMPLES = 1;
+const DENOISE_UNTIL_SAMPLES = 20;
+const MOVE_DURATION = 210;
+const TURN_DURATION = 180;
 const EPSILON = 0.001;
 
 type Vec3 = Readonly<{ x: number; y: number; z: number }>;
@@ -16,12 +36,6 @@ type Material = Readonly<{
   emission?: number;
 }>;
 
-type Sphere = Readonly<{
-  center: Vec3;
-  radius: number;
-  material: Material;
-}>;
-
 type Ray = Readonly<{ origin: Vec3; direction: Vec3 }>;
 
 type Hit = {
@@ -30,6 +44,34 @@ type Hit = {
   normal: Vec3;
   frontFace: boolean;
   material: Material;
+};
+
+type Cell = { column: number; row: number };
+type QueuedAction =
+  | { kind: "move"; relativeDirection: number }
+  | { kind: "turn"; amount: -1 | 1 };
+type ActiveAction =
+  | {
+      kind: "move";
+      startedAt: number;
+      from: Cell;
+      to: Cell;
+    }
+  | {
+      kind: "turn";
+      startedAt: number;
+      fromYaw: number;
+      toYaw: number;
+      targetFacing: number;
+    };
+
+type SceneLight = {
+  position: Vec3;
+  color: Vec3;
+  intensity: number;
+  radius: number;
+  phase: number;
+  flicker: number;
 };
 
 const v = (x = 0, y = 0, z = 0): Vec3 => ({ x, y, z });
@@ -46,29 +88,225 @@ const reflect = (direction: Vec3, normal: Vec3): Vec3 =>
   sub(direction, mul(normal, 2 * dot(direction, normal)));
 const lerp = (a: Vec3, b: Vec3, amount: number): Vec3 =>
   add(mul(a, 1 - amount), mul(b, amount));
+const ease = (amount: number): number => amount * amount * (3 - 2 * amount);
 
-const materials = {
-  coral: { kind: "diffuse", color: v(0.9, 0.16, 0.09) },
-  blue: { kind: "diffuse", color: v(0.08, 0.25, 0.8) },
-  gold: { kind: "metal", color: v(1.0, 0.67, 0.18), roughness: 0.12 },
-  chrome: { kind: "metal", color: v(0.92, 0.96, 1.0), roughness: 0.025 },
-  glass: { kind: "glass", color: v(0.93, 0.98, 1.0), ior: 1.5 },
-  light: { kind: "emissive", color: v(1.0, 0.82, 0.58), emission: 9 },
+const LEVEL = [
+  "###############",
+  "#S....#.......#",
+  "#..F..#..C.F..#",
+  "#.....A.......#",
+  "###.#######.###",
+  "#...#.....#...#",
+  "#.#.#..T..#.#.#",
+  "#.#.#..F..#.#.#",
+  "#.#.###.###.#.#",
+  "#.#.........#.#",
+  "#.#####.#####.#",
+  "#.....#...G...#",
+  "#..C..#...F...#",
+  "#.....#.......#",
+  "###############",
+] as const;
+
+const DIRECTIONS = [
+  { column: 0, row: -1, name: "N" },
+  { column: 1, row: 0, name: "E" },
+  { column: 0, row: 1, name: "S" },
+  { column: -1, row: 0, name: "O" },
+] as const;
+
+function findCell(symbol: string): Cell {
+  for (let row = 0; row < LEVEL.length; row += 1) {
+    const column = LEVEL[row]?.indexOf(symbol) ?? -1;
+    if (column >= 0) return { column, row };
+  }
+  throw new Error(`Cella ${symbol} non trovata`);
+}
+
+function findCells(symbol: string): Cell[] {
+  const cells: Cell[] = [];
+  for (let row = 0; row < LEVEL.length; row += 1) {
+    for (let column = 0; column < (LEVEL[row]?.length ?? 0); column += 1) {
+      if (LEVEL[row]?.[column] === symbol) cells.push({ column, row });
+    }
+  }
+  return cells;
+}
+
+const startCell = findCell("S");
+const goalCell = findCell("G");
+const trapCell = findCell("T");
+
+function cellSymbol(column: number, row: number): string {
+  return LEVEL[row]?.[column] ?? "#";
+}
+
+function hasFloor(column: number, row: number): boolean {
+  return cellSymbol(column, row) !== "#";
+}
+
+function isWalkable(column: number, row: number): boolean {
+  return !["#", "F", "C"].includes(cellSymbol(column, row));
+}
+
+function cellPosition(column: number, row: number, height = 0): Vec3 {
+  return v(
+    (column - startCell.column) * TILE_SIZE,
+    height,
+    (row - startCell.row) * TILE_SIZE,
+  );
+}
+
+const wallMaterials = {
+  Wall_Dark: { kind: "diffuse", color: v(0.2, 0.105, 0.045) },
+  Wall_Medium: { kind: "diffuse", color: v(0.31, 0.165, 0.07) },
+  Wall_Highlights: { kind: "diffuse", color: v(0.46, 0.28, 0.12) },
 } satisfies Record<string, Material>;
 
-const lightSphere: Sphere = {
-  center: v(-2.2, 3.2, 0.4),
-  radius: 0.36,
-  material: materials.light,
-};
+const floorMaterials = {
+  Grey_Floor: { kind: "diffuse", color: v(0.12, 0.115, 0.15) },
+} satisfies Record<string, Material>;
 
-const spheres: readonly Sphere[] = [
-  { center: v(-1.25, -0.18, -1.25), radius: 0.82, material: materials.coral },
-  { center: v(0.15, -0.45, -0.45), radius: 0.55, material: materials.glass },
-  { center: v(1.25, -0.35, -1.55), radius: 0.65, material: materials.gold },
-  { center: v(0.05, 0.55, -2.25), radius: 0.48, material: materials.chrome },
-  { center: v(2.25, -0.55, -2.75), radius: 0.45, material: materials.blue },
-  lightSphere,
+const chestMaterials = {
+  DarkWood: { kind: "diffuse", color: v(0.17, 0.05, 0.022) },
+  Wood: { kind: "diffuse", color: v(0.5, 0.15, 0.045) },
+  Metal: { kind: "metal", color: v(0.42, 0.43, 0.5), roughness: 0.22 },
+} satisfies Record<string, Material>;
+
+const spikeMaterials = {
+  DarkMetal: { kind: "metal", color: v(0.16, 0.17, 0.22), roughness: 0.35 },
+  Metal: { kind: "metal", color: v(0.45, 0.48, 0.56), roughness: 0.18 },
+} satisfies Record<string, Material>;
+
+const fireMaterials = {
+  DarkWood: { kind: "diffuse", color: v(0.12, 0.035, 0.012) },
+  Wood: { kind: "diffuse", color: v(0.34, 0.095, 0.025) },
+  DarkMetal: { kind: "metal", color: v(0.18, 0.19, 0.24), roughness: 0.38 },
+  Fire: { kind: "emissive", color: v(1, 0.22, 0.025), emission: 13 },
+} satisfies Record<string, Material>;
+
+const columnMaterials = {
+  DarkGrey_Floor: { kind: "diffuse", color: v(0.07, 0.065, 0.095) },
+  Grey_Floor: { kind: "diffuse", color: v(0.17, 0.16, 0.21) },
+} satisfies Record<string, Material>;
+
+function baseMesh(source: string, materials: Record<string, Material>, fallback: Material) {
+  return createObjMesh(source, {
+    translation: v(),
+    scale: 1,
+    materials,
+    fallbackMaterial: fallback,
+  });
+}
+
+const wallMesh = baseMesh(wallSource, wallMaterials, wallMaterials.Wall_Medium);
+const floorMesh = baseMesh(floorSource, floorMaterials, floorMaterials.Grey_Floor);
+const archMesh = baseMesh(archSource, wallMaterials, wallMaterials.Wall_Medium);
+const chestMesh = baseMesh(chestSource, chestMaterials, chestMaterials.Wood);
+const spikesMesh = baseMesh(spikesSource, spikeMaterials, spikeMaterials.DarkMetal);
+const torchMesh = baseMesh(torchSource, fireMaterials, fireMaterials.DarkMetal);
+const woodfireMesh = baseMesh(woodfireSource, fireMaterials, fireMaterials.Wood);
+const columnMesh = baseMesh(columnSource, columnMaterials, columnMaterials.Grey_Floor);
+
+const torchPlacements = [
+  { column: 5, row: 2, offset: v(0.9, 0.78, 0), lightOffset: v(0.64, 1.25, 0), rotation: Math.PI / 2 },
+  { column: 7, row: 2, offset: v(-0.9, 0.78, 0), lightOffset: v(-0.64, 1.25, 0), rotation: -Math.PI / 2 },
+  { column: 5, row: 6, offset: v(-0.9, 0.78, 0), lightOffset: v(-0.64, 1.25, 0), rotation: -Math.PI / 2 },
+  { column: 9, row: 7, offset: v(0.9, 0.78, 0), lightOffset: v(0.64, 1.25, 0), rotation: Math.PI / 2 },
+  { column: 5, row: 12, offset: v(0.9, 0.78, 0), lightOffset: v(0.64, 1.25, 0), rotation: Math.PI / 2 },
+  { column: 7, row: 12, offset: v(-0.9, 0.78, 0), lightOffset: v(-0.64, 1.25, 0), rotation: -Math.PI / 2 },
+] as const;
+
+function buildDungeon(): MeshInstance[] {
+  const instances: MeshInstance[] = [];
+  for (let row = 0; row < LEVEL.length; row += 1) {
+    for (let column = 0; column < (LEVEL[row]?.length ?? 0); column += 1) {
+      if (!hasFloor(column, row)) continue;
+      const center = cellPosition(column, row);
+
+      // Il modulo pavimento è spesso 0.26: duplicato in alto chiude il soffitto.
+      instances.push(createMeshInstance(floorMesh, add(center, v(0, -0.13, 0))));
+      instances.push(createMeshInstance(floorMesh, add(center, v(0, 2.13, 0))));
+
+      if (!hasFloor(column, row - 1)) {
+        instances.push(createMeshInstance(wallMesh, add(center, v(0, 1, -1))));
+      }
+      if (!hasFloor(column, row + 1)) {
+        instances.push(createMeshInstance(wallMesh, add(center, v(0, 1, 1)), 1, Math.PI));
+      }
+      if (!hasFloor(column - 1, row)) {
+        instances.push(createMeshInstance(wallMesh, add(center, v(-1, 1, 0)), 1, Math.PI / 2));
+      }
+      if (!hasFloor(column + 1, row)) {
+        instances.push(createMeshInstance(wallMesh, add(center, v(1, 1, 0)), 1, -Math.PI / 2));
+      }
+    }
+  }
+
+  for (const archCell of findCells("A")) {
+    instances.push(createMeshInstance(
+      archMesh,
+      cellPosition(archCell.column, archCell.row),
+      0.5,
+      Math.PI / 2,
+    ));
+  }
+
+  for (const fireCell of findCells("F")) {
+    instances.push(createMeshInstance(
+      woodfireMesh,
+      add(cellPosition(fireCell.column, fireCell.row), v(0, 0.04, 0)),
+      0.92,
+    ));
+  }
+
+  for (const columnCell of findCells("C")) {
+    instances.push(createMeshInstance(
+      columnMesh,
+      cellPosition(columnCell.column, columnCell.row),
+      0.49,
+    ));
+  }
+
+  for (const torch of torchPlacements) {
+    instances.push(createMeshInstance(
+      torchMesh,
+      add(cellPosition(torch.column, torch.row), torch.offset),
+      0.78,
+      torch.rotation,
+    ));
+  }
+
+  const goal = cellPosition(goalCell.column, goalCell.row);
+  instances.push(createMeshInstance(archMesh, add(goal, v(0, 0, -1)), 0.5));
+  instances.push(createMeshInstance(chestMesh, add(goal, v(0, 0.01, 0.68)), 0.88, Math.PI));
+
+  const trap = cellPosition(trapCell.column, trapCell.row);
+  // Abbassati sotto l'altezza occhi: il giocatore può attraversare la cella ferendosi.
+  instances.push(createMeshInstance(spikesMesh, add(trap, v(0, -0.2, 0)), 0.72));
+  return instances;
+}
+
+const dungeonInstances = buildDungeon();
+const dungeonScene = createMeshScene(dungeonInstances);
+
+const staticLights: readonly SceneLight[] = [
+  ...findCells("F").map((cell, index) => ({
+    position: add(cellPosition(cell.column, cell.row), v(0, 0.52, 0)),
+    color: v(1, 0.24, 0.035),
+    intensity: 24,
+    radius: 0.2,
+    phase: index * 1.71,
+    flicker: 0.16,
+  })),
+  ...torchPlacements.map((torch, index) => ({
+    position: add(cellPosition(torch.column, torch.row), torch.lightOffset),
+    color: v(1, 0.38, 0.08),
+    intensity: 13,
+    radius: 0.09,
+    phase: 2.3 + index * 1.37,
+    flicker: 0.11,
+  })),
 ];
 
 let randomState = 1;
@@ -101,108 +339,97 @@ function cosineHemisphere(normal: Vec3): Vec3 {
   return normalize(add(add(mul(tangent, local.x), mul(normal, local.y)), mul(bitangent, local.z)));
 }
 
-function sphereHit(ray: Ray, sphere: Sphere, minDistance: number, maxDistance: number): Hit | null {
-  const offset = sub(ray.origin, sphere.center);
-  const halfB = dot(offset, ray.direction);
-  const discriminant = halfB * halfB - (dot(offset, offset) - sphere.radius * sphere.radius);
-
-  if (discriminant < 0) return null;
-
-  const root = Math.sqrt(discriminant);
-  let distance = -halfB - root;
-  if (distance <= minDistance || distance >= maxDistance) {
-    distance = -halfB + root;
-    if (distance <= minDistance || distance >= maxDistance) return null;
-  }
-
-  const point = add(ray.origin, mul(ray.direction, distance));
-  const outwardNormal = mul(sub(point, sphere.center), 1 / sphere.radius);
-  const frontFace = dot(ray.direction, outwardNormal) < 0;
-
-  return {
-    distance,
-    point,
-    normal: frontFace ? outwardNormal : mul(outwardNormal, -1),
-    frontFace,
-    material: sphere.material,
-  };
-}
-
-function groundHit(ray: Ray, minDistance: number, maxDistance: number): Hit | null {
-  if (Math.abs(ray.direction.y) < 1e-6) return null;
-  const distance = (-1 - ray.origin.y) / ray.direction.y;
-  if (distance <= minDistance || distance >= maxDistance) return null;
-
-  const point = add(ray.origin, mul(ray.direction, distance));
-  const tile = (Math.floor(point.x) + Math.floor(point.z)) & 1;
-  const rings = Math.sin(point.x * 0.7) * Math.sin(point.z * 0.7) * 0.025;
-  const base = tile === 0 ? 0.72 + rings : 0.13 + rings;
-  const material: Material = { kind: "diffuse", color: v(base, base * 0.98, base * 0.92) };
-  const outwardNormal = v(0, 1, 0);
-  const frontFace = dot(ray.direction, outwardNormal) < 0;
-
-  return {
-    distance,
-    point,
-    normal: frontFace ? outwardNormal : mul(outwardNormal, -1),
-    frontFace,
-    material,
-  };
-}
-
 function sceneHit(ray: Ray, minDistance = EPSILON, maxDistance = Infinity): Hit | null {
-  let closest = maxDistance;
-  let closestHit: Hit | null = groundHit(ray, minDistance, closest);
-  if (closestHit) closest = closestHit.distance;
-
-  for (const sphere of spheres) {
-    const hit = sphereHit(ray, sphere, minDistance, closest);
-    if (hit) {
-      closest = hit.distance;
-      closestHit = hit;
-    }
-  }
-
-  return closestHit;
+  return hitMeshScene(ray, dungeonScene, minDistance, maxDistance);
 }
 
 function refract(direction: Vec3, normal: Vec3, eta: number): Vec3 {
-  const cosTheta = Math.min(dot(mul(direction, -1), normal), 1);
-  const perpendicular = mul(add(direction, mul(normal, cosTheta)), eta);
+  const cosine = Math.min(dot(mul(direction, -1), normal), 1);
+  const perpendicular = mul(add(direction, mul(normal, cosine)), eta);
   const parallel = mul(normal, -Math.sqrt(Math.abs(1 - dot(perpendicular, perpendicular))));
   return add(perpendicular, parallel);
 }
 
 function schlick(cosine: number, ior: number): number {
-  const r = ((1 - ior) / (1 + ior)) ** 2;
-  return r + (1 - r) * (1 - cosine) ** 5;
+  const reflectance = ((1 - ior) / (1 + ior)) ** 2;
+  return reflectance + (1 - reflectance) * (1 - cosine) ** 5;
 }
 
-function directLight(hit: Hit, lightSample: Vec3): Vec3 {
+const camera = {
+  position: cellPosition(startCell.column, startCell.row, EYE_HEIGHT),
+  yaw: Math.PI,
+  fov: 58 * (Math.PI / 180),
+  aperture: 0.006,
+  focusDistance: 4,
+};
+
+const playerLight: SceneLight = {
+  position: add(camera.position, v(0, 0.14, 0)),
+  color: v(1, 0.7, 0.4),
+  intensity: 2.8,
+  radius: 0.05,
+  phase: 0,
+  flicker: 0,
+};
+
+let renderTimeSeconds = 0;
+
+function flickerMultiplier(light: SceneLight): number {
+  return 1 + light.flicker * (
+    Math.sin(renderTimeSeconds * 8.7 + light.phase) * 0.65 +
+    Math.sin(renderTimeSeconds * 17.3 + light.phase * 2.1) * 0.35
+  );
+}
+
+function directLight(hit: Hit, light: SceneLight, selectionProbability: number): Vec3 {
+  const lightSample = add(light.position, mul(randomUnitVector(), light.radius));
   const toLight = sub(lightSample, hit.point);
   const distanceSquared = dot(toLight, toLight);
   const distanceToLight = Math.sqrt(distanceSquared);
-  const lightDirection = mul(toLight, 1 / distanceToLight);
+  const lightDirection = mul(toLight, 1 / Math.max(distanceToLight, EPSILON));
   const cosine = Math.max(0, dot(hit.normal, lightDirection));
   if (cosine <= 0) return v();
 
-  const shadowOrigin = add(hit.point, mul(hit.normal, EPSILON * 2));
+  const shadowOrigin = add(hit.point, mul(hit.normal, EPSILON * 3));
   const blocker = sceneHit({ origin: shadowOrigin, direction: lightDirection }, EPSILON, distanceToLight);
   if (blocker && blocker.material.kind !== "emissive") return v();
 
-  const intensity = (lightSphere.material.emission ?? 0) * 3.2;
-  return mul(lightSphere.material.color, (cosine * intensity) / Math.max(1, distanceSquared));
+  const intensity = light.intensity * flickerMultiplier(light);
+  return mul(
+    light.color,
+    (cosine * intensity) /
+      (Math.max(0.35, distanceSquared) * Math.max(selectionProbability, 1e-6)),
+  );
 }
 
 function sampleLight(hit: Hit): Vec3 {
-  return directLight(hit, add(lightSphere.center, mul(randomUnitVector(), lightSphere.radius)));
+  const lightCount = staticLights.length + 1;
+  let totalWeight = 0;
+  for (let index = 0; index < lightCount; index += 1) {
+    const light = index === 0 ? playerLight : staticLights[index - 1];
+    if (!light) continue;
+    const offset = sub(light.position, hit.point);
+    const distanceSquared = dot(offset, offset);
+    totalWeight += light.intensity / Math.max(0.5, distanceSquared);
+  }
+
+  let threshold = random() * totalWeight;
+  for (let index = 0; index < lightCount; index += 1) {
+    const light = index === 0 ? playerLight : staticLights[index - 1];
+    if (!light) continue;
+    const offset = sub(light.position, hit.point);
+    const weight = light.intensity / Math.max(0.5, dot(offset, offset));
+    threshold -= weight;
+    if (threshold <= 0 || index === lightCount - 1) {
+      return directLight(hit, light, weight / Math.max(totalWeight, 1e-6));
+    }
+  }
+  return v();
 }
 
-function sky(direction: Vec3): Vec3 {
-  const gradient = Math.max(0, direction.y * 0.5 + 0.5);
-  const horizon = v(0.74, 0.82, 0.94);
-  const zenith = v(0.06, 0.12, 0.25);
-  return lerp(horizon, zenith, gradient ** 0.65);
+function dungeonDarkness(direction: Vec3): Vec3 {
+  const lift = Math.max(0, direction.y) * 0.008;
+  return v(0.004 + lift, 0.005 + lift, 0.009 + lift * 1.5);
 }
 
 function trace(initialRay: Ray): Vec3 {
@@ -213,34 +440,32 @@ function trace(initialRay: Ray): Vec3 {
   for (let bounce = 0; bounce < MAX_BOUNCES; bounce += 1) {
     const hit = sceneHit(ray);
     if (!hit) {
-      radiance = add(radiance, multiply(throughput, sky(ray.direction)));
+      radiance = add(radiance, multiply(throughput, dungeonDarkness(ray.direction)));
       break;
     }
 
     if (hit.material.kind === "emissive") {
-      radiance = add(
-        radiance,
-        mul(multiply(throughput, hit.material.color), hit.material.emission ?? 1),
-      );
+      radiance = add(radiance, mul(multiply(throughput, hit.material.color), hit.material.emission ?? 1));
       break;
     }
 
     if (hit.material.kind === "diffuse") {
-      const direct = sampleLight(hit);
-      radiance = add(radiance, multiply(throughput, multiply(hit.material.color, direct)));
+      radiance = add(
+        radiance,
+        multiply(throughput, multiply(hit.material.color, sampleLight(hit))),
+      );
       throughput = multiply(throughput, hit.material.color);
       ray = {
-        origin: add(hit.point, mul(hit.normal, EPSILON * 2)),
+        origin: add(hit.point, mul(hit.normal, EPSILON * 3)),
         direction: cosineHemisphere(hit.normal),
       };
     } else if (hit.material.kind === "metal") {
-      const roughness = hit.material.roughness ?? 0;
       const reflected = reflect(ray.direction, hit.normal);
-      const scattered = normalize(add(reflected, mul(randomUnitVector(), roughness)));
+      const scattered = normalize(add(reflected, mul(randomUnitVector(), hit.material.roughness ?? 0)));
       if (dot(scattered, hit.normal) <= 0) break;
       throughput = multiply(throughput, hit.material.color);
       ray = {
-        origin: add(hit.point, mul(hit.normal, EPSILON * 2)),
+        origin: add(hit.point, mul(hit.normal, EPSILON * 3)),
         direction: scattered,
       };
     } else {
@@ -253,28 +478,30 @@ function trace(initialRay: Ray): Vec3 {
         : refract(ray.direction, hit.normal, eta);
       throughput = multiply(throughput, hit.material.color);
       ray = {
-        origin: add(hit.point, mul(direction, EPSILON * 2)),
+        origin: add(hit.point, mul(direction, EPSILON * 3)),
         direction: normalize(direction),
       };
     }
 
     if (bounce >= 2) {
-      const survival = Math.min(0.95, Math.max(throughput.x, throughput.y, throughput.z));
+      const survival = Math.min(0.94, Math.max(throughput.x, throughput.y, throughput.z));
       if (random() > survival) break;
-      throughput = mul(throughput, 1 / Math.max(survival, 0.01));
+      throughput = mul(throughput, 1 / Math.max(0.01, survival));
     }
   }
-
   return radiance;
 }
 
 const canvasElement = document.querySelector<HTMLCanvasElement>("#app");
 const sampleLabel = document.querySelector<HTMLElement>("#samples");
+const messageLabel = document.querySelector<HTMLElement>("#message");
+const positionLabel = document.querySelector<HTMLElement>("#position");
+const healthLabel = document.querySelector<HTMLElement>("#health");
 if (!canvasElement) throw new Error("Canvas #app non trovato");
 const canvas = canvasElement;
-
 canvas.width = WIDTH;
 canvas.height = HEIGHT;
+
 const canvasContext = canvas.getContext("2d", { alpha: false });
 if (!canvasContext) throw new Error("Contesto 2D non disponibile");
 const context = canvasContext;
@@ -285,17 +512,20 @@ const accumulation = new Float32Array(WIDTH * HEIGHT * 3);
 const resolved = new Float32Array(WIDTH * HEIGHT * 3);
 const denoisedA = new Float32Array(WIDTH * HEIGHT * 3);
 const denoisedB = new Float32Array(WIDTH * HEIGHT * 3);
-const pressed = new Set<string>();
 
-const camera = {
-  position: v(0, 0.55, 4.2),
-  yaw: 0,
-  pitch: -0.06,
-  fov: 52 * (Math.PI / 180),
-  aperture: 0.018,
-  focusDistance: 5.25,
+const player = {
+  column: startCell.column,
+  row: startCell.row,
+  facing: 2,
+  health: 100,
+  won: false,
 };
 
+const actionQueue: QueuedAction[] = [];
+const triggeredTraps = new Set<string>();
+let activeAction: ActiveAction | null = null;
+let statusMessage = "Trova il baule oltre il labirinto";
+let statusUntil = 0;
 let samples = 0;
 let lastTime = performance.now();
 let cameraDirty = true;
@@ -307,14 +537,9 @@ function resetAccumulation(): void {
 }
 
 function cameraBasis(): { forward: Vec3; right: Vec3; up: Vec3 } {
-  const forward = normalize(v(
-    Math.sin(camera.yaw) * Math.cos(camera.pitch),
-    Math.sin(camera.pitch),
-    -Math.cos(camera.yaw) * Math.cos(camera.pitch),
-  ));
+  const forward = normalize(v(Math.sin(camera.yaw), 0, -Math.cos(camera.yaw)));
   const right = normalize(cross(forward, v(0, 1, 0)));
-  const up = normalize(cross(right, forward));
-  return { forward, right, up };
+  return { forward, right, up: v(0, 1, 0) };
 }
 
 function cameraRay(
@@ -323,13 +548,12 @@ function cameraRay(
   { forward, right, up }: ReturnType<typeof cameraBasis>,
   stablePrimary = false,
 ): Ray {
-  const scale = Math.tan(camera.fov * 0.5);
   const sampleX = stablePrimary ? 0.5 : random();
   const sampleY = stablePrimary ? 0.5 : random();
+  const scale = Math.tan(camera.fov * 0.5);
   const screenX = (2 * ((x + sampleX) / WIDTH) - 1) * scale;
   const screenY = (1 - 2 * ((y + sampleY) / HEIGHT)) * scale;
   const pinholeDirection = normalize(add(add(forward, mul(right, screenX)), mul(up, screenY)));
-
   if (stablePrimary) return { origin: camera.position, direction: pinholeDirection };
 
   const lensAngle = random() * Math.PI * 2;
@@ -338,9 +562,9 @@ function cameraRay(
     mul(right, Math.cos(lensAngle) * lensRadius),
     mul(up, Math.sin(lensAngle) * lensRadius),
   );
-  const focalPoint = add(camera.position, mul(pinholeDirection, camera.focusDistance));
+  const focusPoint = add(camera.position, mul(pinholeDirection, camera.focusDistance));
   const origin = add(camera.position, lensOffset);
-  return { origin, direction: normalize(sub(focalPoint, origin)) };
+  return { origin, direction: normalize(sub(focusPoint, origin)) };
 }
 
 function aces(value: number): number {
@@ -370,28 +594,17 @@ function renderSample(stablePrimary = false): void {
 
 function writePixel(pixel: number, color: Vec3): void {
   const output = pixel * 4;
-  const exposure = 1.05;
-  const red = aces(color.x * exposure);
-  const green = aces(color.y * exposure);
-  const blue = aces(color.z * exposure);
+  const red = aces(color.x * 1.35);
+  const green = aces(color.y * 1.35);
+  const blue = aces(color.z * 1.35);
   image.data[output] = Math.round(Math.sqrt(red) * 255);
   image.data[output + 1] = Math.round(Math.sqrt(green) * 255);
   image.data[output + 2] = Math.round(Math.sqrt(blue) * 255);
   image.data[output + 3] = 255;
 }
 
-function setStatus(text: string): void {
-  if (sampleLabel) sampleLabel.textContent = text;
-}
-
-function denoisePass(
-  source: Float32Array,
-  target: Float32Array,
-  step: number,
-  colorSigma: number,
-): void {
-  const sigmaSquared = colorSigma * colorSigma;
-
+function denoisePass(source: Float32Array, target: Float32Array, step: number, sigma: number): void {
+  const sigmaSquared = sigma * sigma;
   for (let y = 0; y < HEIGHT; y += 1) {
     for (let x = 0; x < WIDTH; x += 1) {
       const center = (y * WIDTH + x) * 3;
@@ -415,17 +628,14 @@ function denoisePass(
             (sampleR - centerR) ** 2 +
             (sampleG - centerG) ** 2 +
             (sampleB - centerB) ** 2;
-          const spatialWeight = offsetX === 0 && offsetY === 0
-            ? 4
-            : offsetX === 0 || offsetY === 0 ? 2 : 1;
-          const weight = spatialWeight * Math.exp(-difference / Math.max(0.001, sigmaSquared));
+          const spatial = offsetX === 0 && offsetY === 0 ? 4 : offsetX === 0 || offsetY === 0 ? 2 : 1;
+          const weight = spatial * Math.exp(-difference / Math.max(0.001, sigmaSquared));
           red += sampleR * weight;
           green += sampleG * weight;
           blue += sampleB * weight;
           totalWeight += weight;
         }
       }
-
       target[center] = red / totalWeight;
       target[center + 1] = green / totalWeight;
       target[center + 2] = blue / totalWeight;
@@ -433,14 +643,13 @@ function denoisePass(
   }
 }
 
-function presentAccumulation(): void {
+function present(): void {
   const inverseSamples = 1 / Math.max(1, samples);
-
   for (let pixel = 0; pixel < WIDTH * HEIGHT; pixel += 1) {
-    const accumulator = pixel * 3;
-    resolved[accumulator] = (accumulation[accumulator] ?? 0) * inverseSamples;
-    resolved[accumulator + 1] = (accumulation[accumulator + 1] ?? 0) * inverseSamples;
-    resolved[accumulator + 2] = (accumulation[accumulator + 2] ?? 0) * inverseSamples;
+    const index = pixel * 3;
+    resolved[index] = (accumulation[index] ?? 0) * inverseSamples;
+    resolved[index + 1] = (accumulation[index + 1] ?? 0) * inverseSamples;
+    resolved[index + 2] = (accumulation[index + 2] ?? 0) * inverseSamples;
   }
 
   const denoiseStrength = Math.max(0, 1 - samples / DENOISE_UNTIL_SAMPLES);
@@ -450,105 +659,192 @@ function presentAccumulation(): void {
   }
 
   for (let pixel = 0; pixel < WIDTH * HEIGHT; pixel += 1) {
-    const accumulator = pixel * 3;
+    const index = pixel * 3;
     writePixel(pixel, v(
-      (resolved[accumulator] ?? 0) * (1 - denoiseStrength) +
-        (denoisedB[accumulator] ?? 0) * denoiseStrength,
-      (resolved[accumulator + 1] ?? 0) * (1 - denoiseStrength) +
-        (denoisedB[accumulator + 1] ?? 0) * denoiseStrength,
-      (resolved[accumulator + 2] ?? 0) * (1 - denoiseStrength) +
-        (denoisedB[accumulator + 2] ?? 0) * denoiseStrength,
+      (resolved[index] ?? 0) * (1 - denoiseStrength) + (denoisedB[index] ?? 0) * denoiseStrength,
+      (resolved[index + 1] ?? 0) * (1 - denoiseStrength) + (denoisedB[index + 1] ?? 0) * denoiseStrength,
+      (resolved[index + 2] ?? 0) * (1 - denoiseStrength) + (denoisedB[index + 2] ?? 0) * denoiseStrength,
     ));
   }
-
   context.putImageData(image, 0, 0);
-  setStatus(`${samples} spp`);
+  if (sampleLabel) sampleLabel.textContent = `${samples} spp`;
 }
 
 function markCameraChanged(): void {
   cameraDirty = true;
 }
 
-function updateCamera(delta: number): boolean {
-  const { forward, right } = cameraBasis();
-  const flatForward = normalize(v(forward.x, 0, forward.z));
-  let movement = v();
-  let changed = false;
-  const speed = (pressed.has("ShiftLeft") || pressed.has("ShiftRight") ? 3.8 : 1.9) * delta;
+function showMessage(message: string, duration = 1400): void {
+  statusMessage = message;
+  statusUntil = performance.now() + duration;
+}
 
-  if (pressed.has("KeyW")) movement = add(movement, flatForward);
-  if (pressed.has("KeyS")) movement = sub(movement, flatForward);
-  if (pressed.has("KeyD")) movement = add(movement, right);
-  if (pressed.has("KeyA")) movement = sub(movement, right);
-  if (pressed.has("KeyE")) movement = add(movement, v(0, 1, 0));
-  if (pressed.has("KeyQ")) movement = sub(movement, v(0, 1, 0));
+function enqueue(action: QueuedAction): void {
+  if (player.won || actionQueue.length >= 2) return;
+  actionQueue.push(action);
+}
 
-  if (length(movement) > 0) {
-    camera.position = add(camera.position, mul(normalize(movement), speed));
-    changed = true;
+function beginNextAction(now: number): void {
+  const action = actionQueue.shift();
+  if (!action) return;
+
+  if (action.kind === "turn") {
+    activeAction = {
+      kind: "turn",
+      startedAt: now,
+      fromYaw: camera.yaw,
+      toYaw: camera.yaw + action.amount * (Math.PI / 2),
+      targetFacing: (player.facing + action.amount + 4) % 4,
+    };
+    return;
   }
 
-  const rotationSpeed = 1.35 * delta;
-  if (pressed.has("ArrowLeft")) { camera.yaw -= rotationSpeed; changed = true; }
-  if (pressed.has("ArrowRight")) { camera.yaw += rotationSpeed; changed = true; }
-  if (pressed.has("ArrowUp")) { camera.pitch += rotationSpeed; changed = true; }
-  if (pressed.has("ArrowDown")) { camera.pitch -= rotationSpeed; changed = true; }
-  camera.pitch = Math.max(-1.45, Math.min(1.45, camera.pitch));
-  return changed;
+  const directionIndex = (player.facing + action.relativeDirection + 4) % 4;
+  const direction = DIRECTIONS[directionIndex];
+  if (!direction) return;
+  const to = {
+    column: player.column + direction.column,
+    row: player.row + direction.row,
+  };
+  if (!isWalkable(to.column, to.row)) {
+    const obstacle = cellSymbol(to.column, to.row);
+    showMessage(
+      obstacle === "F"
+        ? "Il fuoco ti sbarra la strada."
+        : obstacle === "C" ? "Una colonna blocca il passaggio." : "La parete non si muove.",
+      850,
+    );
+    return;
+  }
+  activeAction = {
+    kind: "move",
+    startedAt: now,
+    from: { column: player.column, row: player.row },
+    to,
+  };
+}
+
+function enteredCell(): void {
+  const symbol = cellSymbol(player.column, player.row);
+  if (symbol === "T") {
+    const key = `${player.column},${player.row}`;
+    if (!triggeredTraps.has(key)) {
+      triggeredTraps.add(key);
+      player.health = Math.max(0, player.health - 25);
+      showMessage("CLANG! Gli spuntoni ti feriscono: −25", 2200);
+    }
+  }
+  if (symbol === "G") {
+    player.won = true;
+    actionQueue.length = 0;
+    showMessage("TESORO TROVATO · Hai vinto!", Infinity);
+  }
+}
+
+function updateGame(now: number): void {
+  if (!activeAction) beginNextAction(now);
+  if (!activeAction) return;
+
+  const duration = activeAction.kind === "move" ? MOVE_DURATION : TURN_DURATION;
+  const linearProgress = Math.min(1, (now - activeAction.startedAt) / duration);
+  const progress = ease(linearProgress);
+
+  if (activeAction.kind === "move") {
+    const from = cellPosition(activeAction.from.column, activeAction.from.row, EYE_HEIGHT);
+    const to = cellPosition(activeAction.to.column, activeAction.to.row, EYE_HEIGHT);
+    camera.position = add(lerp(from, to, progress), v(0, Math.sin(linearProgress * Math.PI) * 0.035, 0));
+  } else {
+    camera.yaw = activeAction.fromYaw + (activeAction.toYaw - activeAction.fromYaw) * progress;
+  }
+  markCameraChanged();
+
+  if (linearProgress < 1) return;
+  if (activeAction.kind === "move") {
+    player.column = activeAction.to.column;
+    player.row = activeAction.to.row;
+    camera.position = cellPosition(player.column, player.row, EYE_HEIGHT);
+    enteredCell();
+  } else {
+    player.facing = activeAction.targetFacing;
+    camera.yaw = activeAction.toYaw;
+  }
+  activeAction = null;
+}
+
+function updateHud(now: number): void {
+  const direction = DIRECTIONS[player.facing]?.name ?? "?";
+  if (positionLabel) positionLabel.textContent = `${direction} · ${player.column},${player.row}`;
+  if (healthLabel) healthLabel.textContent = `VITA ${player.health}`;
+  if (messageLabel) {
+    messageLabel.textContent = statusUntil >= now
+      ? statusMessage
+      : player.won ? "TESORO TROVATO" : "Trova il baule";
+    messageLabel.classList.toggle("won", player.won);
+  }
 }
 
 function frame(now: number): void {
-  const delta = Math.min(0.05, (now - lastTime) / 1000);
   lastTime = now;
-  if (updateCamera(delta)) markCameraChanged();
+  renderTimeSeconds = now / 1000;
+  updateGame(now);
+  updateHud(now);
+  playerLight.position = add(camera.position, v(0, 0.14, 0));
 
   if (cameraDirty) {
     resetAccumulation();
     for (let sample = 0; sample < MOTION_SAMPLES; sample += 1) renderSample(true);
     cameraDirty = false;
-    presentAccumulation();
-    setStatus(`${samples} spp · movimento`);
+    present();
   } else if (!paused) {
     renderSample();
-    presentAccumulation();
-  } else {
-    setStatus(`${samples} spp · pausa`);
+    present();
+  } else if (sampleLabel) {
+    sampleLabel.textContent = `${samples} spp · pausa`;
   }
   requestAnimationFrame(frame);
 }
 
+function restart(): void {
+  player.column = startCell.column;
+  player.row = startCell.row;
+  player.facing = 2;
+  player.health = 100;
+  player.won = false;
+  triggeredTraps.clear();
+  actionQueue.length = 0;
+  activeAction = null;
+  camera.position = cellPosition(startCell.column, startCell.row, EYE_HEIGHT);
+  camera.yaw = Math.PI;
+  showMessage("Trova il baule oltre il labirinto", 2200);
+  markCameraChanged();
+}
+
 function fitCanvas(): void {
-  const available = Math.max(64, Math.min(window.innerWidth - 32, window.innerHeight - 112));
-  const scale = Math.max(1, Math.floor(available / WIDTH));
-  const displaySize = scale * WIDTH;
+  const available = Math.max(64, Math.min(window.innerWidth - 28, window.innerHeight - 150));
+  const displaySize = Math.max(1, Math.floor(available / WIDTH)) * WIDTH;
   canvas.style.width = `${displaySize}px`;
   canvas.style.height = `${displaySize}px`;
 }
 
 window.addEventListener("resize", fitCanvas);
 window.addEventListener("keydown", (event) => {
-  if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Space"].includes(event.code)) {
-    event.preventDefault();
-  }
-  if (event.code === "Space" && !event.repeat) paused = !paused;
-  if (event.code === "KeyR" && !event.repeat) {
-    camera.position = v(0, 0.55, 4.2);
-    camera.yaw = 0;
-    camera.pitch = -0.06;
-    markCameraChanged();
-  }
-  pressed.add(event.code);
-});
-window.addEventListener("keyup", (event) => pressed.delete(event.code));
-window.addEventListener("blur", () => pressed.clear());
+  const handled = [
+    "KeyW", "KeyS", "KeyA", "KeyD", "KeyQ", "KeyE",
+    "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "KeyR", "Space",
+  ].includes(event.code);
+  if (handled) event.preventDefault();
+  if (event.repeat) return;
 
-canvas.addEventListener("click", () => canvas.requestPointerLock());
-document.addEventListener("mousemove", (event) => {
-  if (document.pointerLockElement !== canvas) return;
-  camera.yaw += event.movementX * 0.0025;
-  camera.pitch = Math.max(-1.45, Math.min(1.45, camera.pitch - event.movementY * 0.0025));
-  markCameraChanged();
+  if (event.code === "KeyW" || event.code === "ArrowUp") enqueue({ kind: "move", relativeDirection: 0 });
+  if (event.code === "KeyS" || event.code === "ArrowDown") enqueue({ kind: "move", relativeDirection: 2 });
+  if (event.code === "KeyQ") enqueue({ kind: "move", relativeDirection: -1 });
+  if (event.code === "KeyE") enqueue({ kind: "move", relativeDirection: 1 });
+  if (event.code === "KeyA" || event.code === "ArrowLeft") enqueue({ kind: "turn", amount: -1 });
+  if (event.code === "KeyD" || event.code === "ArrowRight") enqueue({ kind: "turn", amount: 1 });
+  if (event.code === "KeyR") restart();
+  if (event.code === "Space") paused = !paused;
 });
 
 fitCanvas();
+updateHud(performance.now());
 requestAnimationFrame(frame);
