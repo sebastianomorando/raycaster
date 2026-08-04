@@ -18,6 +18,10 @@ diretta viene valutata a ogni rimbalzo diffuso, producendo illuminazione globale
 ombre morbide e color bleeding; una debole lanterna del giocatore garantisce la
 leggibilità nei passaggi non illuminati.
 
+Quando WebGPU è disponibile, triangoli, materiali, BLAS, TLAS e luci vengono
+caricati in storage buffer e il path tracing viene eseguito da un compute shader
+WGSL. Il renderer TypeScript CPU rimane disponibile come fallback automatico.
+
 To install dependencies:
 
 ```bash

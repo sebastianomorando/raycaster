@@ -67,6 +67,17 @@ export type MeshScene = {
   root: SceneBvhNode;
 };
 
+export type PackedGpuScene = {
+  triangles: ArrayBuffer;
+  materials: ArrayBuffer;
+  blasNodes: ArrayBuffer;
+  instances: ArrayBuffer;
+  tlasNodes: ArrayBuffer;
+  triangleCount: number;
+  materialCount: number;
+  instanceCount: number;
+};
+
 type ObjOptions = {
   translation: MeshVec3;
   scale: number;
@@ -392,6 +403,179 @@ export function hitMeshScene(
   }
 
   return closestHit;
+}
+
+type PackedNode = {
+  min: MeshVec3;
+  max: MeshVec3;
+  leaf: boolean;
+  first: number;
+  countOrRight: number;
+};
+
+const materialKinds: Record<MeshMaterial["kind"], number> = {
+  diffuse: 0,
+  metal: 1,
+  glass: 2,
+  emissive: 3,
+};
+
+export function packMeshScene(scene: MeshScene): PackedGpuScene {
+  const packedTriangles: Triangle[] = [];
+  const packedMaterials: MeshMaterial[] = [];
+  const materialIndices = new Map<MeshMaterial, number>();
+  const blasNodes: PackedNode[] = [];
+  const meshRoots = new Map<TriangleMesh, number>();
+
+  const materialIndex = (material: MeshMaterial): number => {
+    const existing = materialIndices.get(material);
+    if (existing !== undefined) return existing;
+    const index = packedMaterials.length;
+    packedMaterials.push(material);
+    materialIndices.set(material, index);
+    return index;
+  };
+
+  const packBlasNode = (node: BvhNode, mesh: TriangleMesh): number => {
+    const nodeIndex = blasNodes.length;
+    blasNodes.push({ min: node.min, max: node.max, leaf: false, first: 0, countOrRight: 0 });
+    if (node.triangles) {
+      const first = packedTriangles.length;
+      for (const index of node.triangles) {
+        const triangle = mesh.triangles[index];
+        if (triangle) {
+          materialIndex(triangle.material);
+          packedTriangles.push(triangle);
+        }
+      }
+      blasNodes[nodeIndex] = {
+        min: node.min,
+        max: node.max,
+        leaf: true,
+        first,
+        countOrRight: packedTriangles.length - first,
+      };
+    } else {
+      const left = node.left ? packBlasNode(node.left, mesh) : 0;
+      const right = node.right ? packBlasNode(node.right, mesh) : 0;
+      blasNodes[nodeIndex] = {
+        min: node.min,
+        max: node.max,
+        leaf: false,
+        first: left,
+        countOrRight: right,
+      };
+    }
+    return nodeIndex;
+  };
+
+  for (const instance of scene.instances) {
+    if (!meshRoots.has(instance.mesh)) meshRoots.set(instance.mesh, packBlasNode(instance.mesh.root, instance.mesh));
+  }
+
+  const orderedInstances: MeshInstance[] = [];
+  const tlasNodes: PackedNode[] = [];
+  const packTlasNode = (node: SceneBvhNode): number => {
+    const nodeIndex = tlasNodes.length;
+    tlasNodes.push({ min: node.min, max: node.max, leaf: false, first: 0, countOrRight: 0 });
+    if (node.instances) {
+      const first = orderedInstances.length;
+      for (const index of node.instances) {
+        const instance = scene.instances[index];
+        if (instance) orderedInstances.push(instance);
+      }
+      tlasNodes[nodeIndex] = {
+        min: node.min,
+        max: node.max,
+        leaf: true,
+        first,
+        countOrRight: orderedInstances.length - first,
+      };
+    } else {
+      const left = node.left ? packTlasNode(node.left) : 0;
+      const right = node.right ? packTlasNode(node.right) : 0;
+      tlasNodes[nodeIndex] = {
+        min: node.min,
+        max: node.max,
+        leaf: false,
+        first: left,
+        countOrRight: right,
+      };
+    }
+    return nodeIndex;
+  };
+  packTlasNode(scene.root);
+
+  const triangleBuffer = new ArrayBuffer(packedTriangles.length * 112);
+  const triangleView = new DataView(triangleBuffer);
+  packedTriangles.forEach((triangle, index) => {
+    const offset = index * 112;
+    const vectors = [triangle.a, triangle.b, triangle.c, triangle.normalA, triangle.normalB, triangle.normalC];
+    vectors.forEach((vector, vectorIndex) => {
+      const base = offset + vectorIndex * 16;
+      triangleView.setFloat32(base, vector.x, true);
+      triangleView.setFloat32(base + 4, vector.y, true);
+      triangleView.setFloat32(base + 8, vector.z, true);
+      triangleView.setFloat32(base + 12, 0, true);
+    });
+    triangleView.setUint32(offset + 96, materialIndex(triangle.material), true);
+  });
+
+  const materialBuffer = new ArrayBuffer(packedMaterials.length * 32);
+  const materialView = new DataView(materialBuffer);
+  packedMaterials.forEach((material, index) => {
+    const offset = index * 32;
+    materialView.setFloat32(offset, material.color.x, true);
+    materialView.setFloat32(offset + 4, material.color.y, true);
+    materialView.setFloat32(offset + 8, material.color.z, true);
+    materialView.setFloat32(offset + 12, materialKinds[material.kind], true);
+    materialView.setFloat32(offset + 16, material.roughness ?? 0, true);
+    materialView.setFloat32(offset + 20, material.ior ?? 1.5, true);
+    materialView.setFloat32(offset + 24, material.emission ?? 0, true);
+  });
+
+  const packNodes = (nodes: PackedNode[]): ArrayBuffer => {
+    const buffer = new ArrayBuffer(nodes.length * 48);
+    const view = new DataView(buffer);
+    nodes.forEach((node, index) => {
+      const offset = index * 48;
+      view.setFloat32(offset, node.min.x, true);
+      view.setFloat32(offset + 4, node.min.y, true);
+      view.setFloat32(offset + 8, node.min.z, true);
+      view.setFloat32(offset + 12, node.leaf ? 1 : 0, true);
+      view.setFloat32(offset + 16, node.max.x, true);
+      view.setFloat32(offset + 20, node.max.y, true);
+      view.setFloat32(offset + 24, node.max.z, true);
+      view.setFloat32(offset + 28, 0, true);
+      view.setUint32(offset + 32, node.first, true);
+      view.setUint32(offset + 36, node.countOrRight, true);
+    });
+    return buffer;
+  };
+
+  const instanceBuffer = new ArrayBuffer(orderedInstances.length * 32);
+  const instanceView = new DataView(instanceBuffer);
+  orderedInstances.forEach((instance, index) => {
+    const offset = index * 32;
+    instanceView.setFloat32(offset, instance.translation.x, true);
+    instanceView.setFloat32(offset + 4, instance.translation.y, true);
+    instanceView.setFloat32(offset + 8, instance.translation.z, true);
+    instanceView.setFloat32(offset + 12, instance.scale, true);
+    instanceView.setFloat32(offset + 16, Math.cos(instance.rotationY), true);
+    instanceView.setFloat32(offset + 20, Math.sin(instance.rotationY), true);
+    instanceView.setUint32(offset + 24, meshRoots.get(instance.mesh) ?? 0, true);
+  });
+
+  return {
+    triangles: triangleBuffer,
+    materials: materialBuffer,
+    blasNodes: packNodes(blasNodes),
+    instances: instanceBuffer,
+    tlasNodes: packNodes(tlasNodes),
+    triangleCount: packedTriangles.length,
+    materialCount: packedMaterials.length,
+    instanceCount: orderedInstances.length,
+  };
 }
 
 function hitTriangle(

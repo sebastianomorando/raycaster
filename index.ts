@@ -11,8 +11,10 @@ import {
   createMeshScene,
   createObjMesh,
   hitMeshScene,
+  packMeshScene,
   type MeshInstance,
 } from "./mesh.ts";
+import { createWebGpuRenderer, type WebGpuRenderer } from "./renderer-webgpu.ts";
 
 const WIDTH = 64;
 const HEIGHT = 64;
@@ -498,7 +500,7 @@ const messageLabel = document.querySelector<HTMLElement>("#message");
 const positionLabel = document.querySelector<HTMLElement>("#position");
 const healthLabel = document.querySelector<HTMLElement>("#health");
 if (!canvasElement) throw new Error("Canvas #app non trovato");
-const canvas = canvasElement;
+let canvas = canvasElement;
 canvas.width = WIDTH;
 canvas.height = HEIGHT;
 
@@ -530,6 +532,7 @@ let samples = 0;
 let lastTime = performance.now();
 let cameraDirty = true;
 let paused = false;
+let gpuRenderer: WebGpuRenderer | null = null;
 
 function resetAccumulation(): void {
   accumulation.fill(0);
@@ -790,7 +793,26 @@ function frame(now: number): void {
   updateHud(now);
   playerLight.position = add(camera.position, v(0, 0.14, 0));
 
-  if (cameraDirty) {
+  if (gpuRenderer && !paused) {
+    const basis = cameraBasis();
+    samples = gpuRenderer.render({
+      position: camera.position,
+      forward: basis.forward,
+      right: basis.right,
+      up: basis.up,
+      playerLightPosition: playerLight.position,
+      playerLightColor: playerLight.color,
+      playerLightIntensity: playerLight.intensity,
+      fov: camera.fov,
+      time: renderTimeSeconds,
+      reset: cameraDirty,
+      moving: cameraDirty || activeAction !== null,
+    });
+    cameraDirty = false;
+    if (sampleLabel) sampleLabel.textContent = `${samples} spp · GPU`;
+  } else if (gpuRenderer && paused) {
+    if (sampleLabel) sampleLabel.textContent = `${samples} spp · GPU · pausa`;
+  } else if (cameraDirty) {
     resetAccumulation();
     for (let sample = 0; sample < MOTION_SAMPLES; sample += 1) renderSample(true);
     cameraDirty = false;
@@ -802,6 +824,26 @@ function frame(now: number): void {
     sampleLabel.textContent = `${samples} spp · pausa`;
   }
   requestAnimationFrame(frame);
+}
+
+async function initializeWebGpu(): Promise<void> {
+  if (!(navigator as Navigator & { gpu?: unknown }).gpu) return;
+  const gpuCanvas = canvas.cloneNode(true) as HTMLCanvasElement;
+  gpuCanvas.width = WIDTH;
+  gpuCanvas.height = HEIGHT;
+
+  try {
+    const packedScene = packMeshScene(dungeonScene);
+    const renderer = await createWebGpuRenderer(gpuCanvas, packedScene, staticLights);
+    if (!renderer) return;
+    canvas.replaceWith(gpuCanvas);
+    canvas = gpuCanvas;
+    gpuRenderer = renderer;
+    cameraDirty = true;
+    fitCanvas();
+  } catch (error) {
+    console.warn("WebGPU non disponibile, mantengo il renderer CPU.", error);
+  }
 }
 
 function restart(): void {
@@ -848,3 +890,4 @@ window.addEventListener("keydown", (event) => {
 fitCanvas();
 updateHud(performance.now());
 requestAnimationFrame(frame);
+void initializeWebGpu();
