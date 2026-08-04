@@ -1,0 +1,17 @@
+{
+  "name": "raycaster",
+  "module": "index.ts",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "bun index.html",
+    "build": "bun build ./index.html --outdir=dist --minify",
+    "check": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  }
+}
