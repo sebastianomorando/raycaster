@@ -26,7 +26,7 @@ esegue un attacco corpo a corpo. I nemici hanno vita, attacco, difesa e drop pro
 le barre sopra gli impostori mostrano i danni subiti.
 
 L'inventario contiene fino a otto oggetti e gestisce armi, armature e consumabili.
-Gli oggetti a terra sono indicati da piccoli rombi colorati e vengono raccolti
+Gli oggetti a terra usano le stesse icone pixel art dell'inventario e vengono raccolti
 automaticamente attraversandone la cella. Equipaggiare o usare un oggetto consuma
 un turno, in stile roguelike.
 
@@ -58,6 +58,18 @@ Build di produzione:
 ```bash
 bun run build
 ```
+
+## Struttura del codice
+
+- `index.ts`: stato della partita, turni, input, HUD e orchestrazione dei renderer.
+- `game/content.ts`: definizioni e factory di nemici, giocatore, oggetti e drop.
+- `game/level.ts`: mappa logica e conversione tra griglia e spazio 3D.
+- `game/dungeon.ts`: materiali, mesh, luci e scena statica del dungeon.
+- `game/camera.ts`: base della camera, proiezione e generazione dei raggi primari.
+- `game/cpu-path-tracer.ts`: fallback CPU progressivo, denoise e tone mapping.
+- `game/impostor-renderer.ts`: nemici billboard, barre vita e oggetti a terra.
+- `game/math.ts`: tipi e operazioni vettoriali condivise.
+- `mesh.ts` e `renderer-webgpu.ts`: accelerazione geometrica e backend WebGPU.
 
 Controlli: `W/S` avanti e indietro, `A/D` rotazione di 90°, `Q/E` strafing,
 frecce come alternativa, trascinamento con il pulsante del mouse premuto per guardarsi

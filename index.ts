@@ -1,40 +1,39 @@
-import archSource from "./ModularDungeon/OBJ/Arch.obj" with { type: "text" };
-import chestSource from "./ModularDungeon/OBJ/Chest.obj" with { type: "text" };
-import columnSource from "./ModularDungeon/OBJ/Column.obj" with { type: "text" };
-import ghostImpostorUrl from "./fantasycharacters/FantasyCharacters_ghost.png";
-import impImpostorUrl from "./fantasycharacters/FantasyCharacters_imp.png";
-import lichImpostorUrl from "./fantasycharacters/FantasyCharacters_lich.png";
-import magmaDemonImpostorUrl from "./fantasycharacters/FantasyCharacters_magma_demon.png";
-import boneMailIconUrl from "./icons/Armor/Head_Helmet_Dragon.png";
-import leatherArmorIconUrl from "./icons/Armor/Chest_Cloth_Torn.png";
-import healingPotionIconUrl from "./icons/Potions/Minor_Potion_health.png";
-import spiritTonicIconUrl from "./icons/Potions/Major_Potion_mana.png";
-import emberBladeIconUrl from "./icons/Weapons/Sword_fire.png";
-import ironSwordIconUrl from "./icons/Weapons/Sword.png";
-import rustySwordIconUrl from "./icons/Weapons/Sword_Rusty.png";
-import floorSource from "./ModularDungeon/OBJ/Floor_Modular.obj" with { type: "text" };
-import spikesSource from "./ModularDungeon/OBJ/Trap_spikes.obj" with { type: "text" };
-import torchSource from "./ModularDungeon/OBJ/Torch.obj" with { type: "text" };
-import wallSource from "./ModularDungeon/OBJ/Wall_Modular.obj" with { type: "text" };
-import woodfireSource from "./ModularDungeon/OBJ/Woodfire.obj" with { type: "text" };
+/**
+ * Entry point del gioco.
+ *
+ * Qui rimangono lo stato della partita, le regole a turni, il loop principale e
+ * il collegamento con il DOM. Dati, scena 3D e renderer vivono nei moduli `game/`.
+ */
+import { cameraBasis, type Camera } from "./game/camera.ts";
 import {
-  createMeshInstance,
-  createMeshScene,
-  createObjMesh,
-  hitMeshScene,
-  packMeshScene,
-  type MeshInstance,
-} from "./mesh.ts";
+  GameEntityFactory,
+  ITEM_DEFINITIONS,
+  createEnemies,
+  type Enemy,
+  type GroundItem,
+  type InventoryItem,
+} from "./game/content.ts";
+import { CpuPathTracer } from "./game/cpu-path-tracer.ts";
+import { dungeonScene, staticLights, type SceneLight } from "./game/dungeon.ts";
+import { renderImpostors as drawImpostors } from "./game/impostor-renderer.ts";
+import {
+  DIRECTIONS,
+  LEVEL,
+  cellPosition,
+  cellSymbol,
+  isWalkable,
+  startCell,
+  type Cell,
+} from "./game/level.ts";
+import { add, ease, lerp, v } from "./game/math.ts";
+import { packMeshScene } from "./mesh.ts";
 import { createWebGpuRenderer, type WebGpuRenderer } from "./renderer-webgpu.ts";
 
 const RESOLUTIONS = [32, 64, 128, 256] as const;
 type RenderResolution = typeof RESOLUTIONS[number];
 let renderSize: RenderResolution = 64;
-const TILE_SIZE = 2;
 const EYE_HEIGHT = 0.68;
-const MAX_BOUNCES = 5;
 const MOTION_SAMPLES = 1;
-const DENOISE_UNTIL_SAMPLES = 20;
 const MOVE_DURATION = 210;
 const TURN_DURATION = 180;
 const VIEW_RESET_DURATION = 160;
@@ -45,30 +44,6 @@ const MIN_FOV = 30 * (Math.PI / 180);
 const MAX_FOV = 90 * (Math.PI / 180);
 const ZOOM_SENSITIVITY = 0.0008;
 const INVENTORY_CAPACITY = 8;
-const EPSILON = 0.001;
-
-type Vec3 = Readonly<{ x: number; y: number; z: number }>;
-type MaterialKind = "diffuse" | "metal" | "glass" | "emissive";
-
-type Material = Readonly<{
-  kind: MaterialKind;
-  color: Vec3;
-  roughness?: number;
-  ior?: number;
-  emission?: number;
-}>;
-
-type Ray = Readonly<{ origin: Vec3; direction: Vec3 }>;
-
-type Hit = {
-  distance: number;
-  point: Vec3;
-  normal: Vec3;
-  frontFace: boolean;
-  material: Material;
-};
-
-type Cell = { column: number; row: number };
 type QueuedAction =
   | { kind: "move"; relativeDirection: number }
   | { kind: "turn"; amount: -1 | 1 }
@@ -96,444 +71,8 @@ type ViewSnap = {
   toYaw: number;
 };
 
-type ItemId =
-  | "rusty_sword"
-  | "iron_sword"
-  | "ember_blade"
-  | "leather_armor"
-  | "bone_mail"
-  | "healing_potion"
-  | "spirit_tonic";
-
-type ItemDefinition = Readonly<{
-  name: string;
-  kind: "weapon" | "armor" | "consumable";
-  icon: string;
-  attack?: number;
-  defense?: number;
-  healing?: number;
-}>;
-
-type InventoryItem = Readonly<{
-  instanceId: number;
-  definitionId: ItemId;
-}>;
-
-type GroundItem = InventoryItem & Cell;
-
-type EnemyTemplate = Readonly<{
-  name: string;
-  source: string;
-  column: number;
-  row: number;
-  height: number;
-  health: number;
-  attack: number;
-  defense: number;
-  sight: number;
-  drop: ItemId;
-}>;
-
-type Enemy = Omit<EnemyTemplate, "column" | "row"> & {
-  id: number;
-  column: number;
-  row: number;
-  currentHealth: number;
-  alerted: boolean;
-  alive: boolean;
-  image: HTMLImageElement;
-};
-
-type Player = {
-  column: number;
-  row: number;
-  facing: number;
-  maxHealth: number;
-  health: number;
-  baseAttack: number;
-  baseDefense: number;
-  turns: number;
-  dead: boolean;
-  won: boolean;
-  inventory: InventoryItem[];
-  weaponInstanceId: number | null;
-  armorInstanceId: number | null;
-};
-
-type SceneLight = {
-  position: Vec3;
-  color: Vec3;
-  intensity: number;
-  radius: number;
-  phase: number;
-  flicker: number;
-};
-
-const v = (x = 0, y = 0, z = 0): Vec3 => ({ x, y, z });
-const add = (a: Vec3, b: Vec3): Vec3 => v(a.x + b.x, a.y + b.y, a.z + b.z);
-const sub = (a: Vec3, b: Vec3): Vec3 => v(a.x - b.x, a.y - b.y, a.z - b.z);
-const mul = (a: Vec3, scalar: number): Vec3 => v(a.x * scalar, a.y * scalar, a.z * scalar);
-const multiply = (a: Vec3, b: Vec3): Vec3 => v(a.x * b.x, a.y * b.y, a.z * b.z);
-const dot = (a: Vec3, b: Vec3): number => a.x * b.x + a.y * b.y + a.z * b.z;
-const cross = (a: Vec3, b: Vec3): Vec3 =>
-  v(a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x);
-const length = (a: Vec3): number => Math.sqrt(dot(a, a));
-const normalize = (a: Vec3): Vec3 => mul(a, 1 / Math.max(length(a), Number.EPSILON));
-const reflect = (direction: Vec3, normal: Vec3): Vec3 =>
-  sub(direction, mul(normal, 2 * dot(direction, normal)));
-const lerp = (a: Vec3, b: Vec3, amount: number): Vec3 =>
-  add(mul(a, 1 - amount), mul(b, amount));
-const ease = (amount: number): number => amount * amount * (3 - 2 * amount);
-
-const LEVEL = [
-  "###############",
-  "#S....#.......#",
-  "#..F..#..C.F..#",
-  "#.....A.......#",
-  "###.#######.###",
-  "#...#.....#...#",
-  "#.#.#..T..#.#.#",
-  "#.#.#..F..#.#.#",
-  "#.#.###.###.#.#",
-  "#.#.........#.#",
-  "#.#####.#####.#",
-  "#.....#...G...#",
-  "#..C..#...F...#",
-  "#.....#.......#",
-  "###############",
-] as const;
-
-const DIRECTIONS = [
-  { column: 0, row: -1, name: "N" },
-  { column: 1, row: 0, name: "E" },
-  { column: 0, row: 1, name: "S" },
-  { column: -1, row: 0, name: "O" },
-] as const;
-
-function findCell(symbol: string): Cell {
-  for (let row = 0; row < LEVEL.length; row += 1) {
-    const column = LEVEL[row]?.indexOf(symbol) ?? -1;
-    if (column >= 0) return { column, row };
-  }
-  throw new Error(`Cella ${symbol} non trovata`);
-}
-
-function findCells(symbol: string): Cell[] {
-  const cells: Cell[] = [];
-  for (let row = 0; row < LEVEL.length; row += 1) {
-    for (let column = 0; column < (LEVEL[row]?.length ?? 0); column += 1) {
-      if (LEVEL[row]?.[column] === symbol) cells.push({ column, row });
-    }
-  }
-  return cells;
-}
-
-const startCell = findCell("S");
-const goalCell = findCell("G");
-const trapCell = findCell("T");
-
-function cellSymbol(column: number, row: number): string {
-  return LEVEL[row]?.[column] ?? "#";
-}
-
-function hasFloor(column: number, row: number): boolean {
-  return cellSymbol(column, row) !== "#";
-}
-
-function isWalkable(column: number, row: number): boolean {
-  return !["#", "F", "C"].includes(cellSymbol(column, row));
-}
-
-function cellPosition(column: number, row: number, height = 0): Vec3 {
-  return v(
-    (column - startCell.column) * TILE_SIZE,
-    height,
-    (row - startCell.row) * TILE_SIZE,
-  );
-}
-
-const wallMaterials = {
-  Wall_Dark: { kind: "diffuse", color: v(0.2, 0.105, 0.045) },
-  Wall_Medium: { kind: "diffuse", color: v(0.31, 0.165, 0.07) },
-  Wall_Highlights: { kind: "diffuse", color: v(0.46, 0.28, 0.12) },
-} satisfies Record<string, Material>;
-
-const floorMaterials = {
-  Grey_Floor: { kind: "diffuse", color: v(0.12, 0.115, 0.15) },
-} satisfies Record<string, Material>;
-
-const chestMaterials = {
-  DarkWood: { kind: "diffuse", color: v(0.17, 0.05, 0.022) },
-  Wood: { kind: "diffuse", color: v(0.5, 0.15, 0.045) },
-  Metal: { kind: "metal", color: v(0.42, 0.43, 0.5), roughness: 0.22 },
-} satisfies Record<string, Material>;
-
-const spikeMaterials = {
-  DarkMetal: { kind: "metal", color: v(0.16, 0.17, 0.22), roughness: 0.35 },
-  Metal: { kind: "metal", color: v(0.45, 0.48, 0.56), roughness: 0.18 },
-} satisfies Record<string, Material>;
-
-const fireMaterials = {
-  DarkWood: { kind: "diffuse", color: v(0.12, 0.035, 0.012) },
-  Wood: { kind: "diffuse", color: v(0.34, 0.095, 0.025) },
-  DarkMetal: { kind: "metal", color: v(0.18, 0.19, 0.24), roughness: 0.38 },
-  Fire: { kind: "emissive", color: v(1, 0.22, 0.025), emission: 13 },
-} satisfies Record<string, Material>;
-
-const columnMaterials = {
-  DarkGrey_Floor: { kind: "diffuse", color: v(0.07, 0.065, 0.095) },
-  Grey_Floor: { kind: "diffuse", color: v(0.17, 0.16, 0.21) },
-} satisfies Record<string, Material>;
-
-function baseMesh(source: string, materials: Record<string, Material>, fallback: Material) {
-  return createObjMesh(source, {
-    translation: v(),
-    scale: 1,
-    materials,
-    fallbackMaterial: fallback,
-  });
-}
-
-const wallMesh = baseMesh(wallSource, wallMaterials, wallMaterials.Wall_Medium);
-const floorMesh = baseMesh(floorSource, floorMaterials, floorMaterials.Grey_Floor);
-const archMesh = baseMesh(archSource, wallMaterials, wallMaterials.Wall_Medium);
-const chestMesh = baseMesh(chestSource, chestMaterials, chestMaterials.Wood);
-const spikesMesh = baseMesh(spikesSource, spikeMaterials, spikeMaterials.DarkMetal);
-const torchMesh = baseMesh(torchSource, fireMaterials, fireMaterials.DarkMetal);
-const woodfireMesh = baseMesh(woodfireSource, fireMaterials, fireMaterials.Wood);
-const columnMesh = baseMesh(columnSource, columnMaterials, columnMaterials.Grey_Floor);
-
-const ITEM_DEFINITIONS: Readonly<Record<ItemId, ItemDefinition>> = {
-  rusty_sword: {
-    name: "Spada arrugginita", kind: "weapon", icon: rustySwordIconUrl, attack: 2,
-  },
-  iron_sword: {
-    name: "Spada di ferro", kind: "weapon", icon: ironSwordIconUrl, attack: 4,
-  },
-  ember_blade: {
-    name: "Lama di brace", kind: "weapon", icon: emberBladeIconUrl, attack: 6,
-  },
-  leather_armor: {
-    name: "Armatura di cuoio", kind: "armor", icon: leatherArmorIconUrl, defense: 2,
-  },
-  bone_mail: {
-    name: "Corazza d'ossa", kind: "armor", icon: boneMailIconUrl, defense: 4,
-  },
-  healing_potion: {
-    name: "Pozione curativa", kind: "consumable", icon: healingPotionIconUrl, healing: 12,
-  },
-  spirit_tonic: {
-    name: "Tonico spirituale", kind: "consumable", icon: spiritTonicIconUrl, healing: 18,
-  },
-};
-
-const itemIconImages = new Map<ItemId, HTMLImageElement>();
-for (const itemId of Object.keys(ITEM_DEFINITIONS) as ItemId[]) {
-  const image = new Image();
-  image.decoding = "async";
-  image.src = ITEM_DEFINITIONS[itemId].icon;
-  itemIconImages.set(itemId, image);
-}
-
-const enemyTemplates: readonly EnemyTemplate[] = [
-  {
-    name: "Imp",
-    source: impImpostorUrl,
-    column: 2,
-    row: 3,
-    height: 1.25,
-    health: 8,
-    attack: 4,
-    defense: 0,
-    sight: 6,
-    drop: "healing_potion",
-  },
-  {
-    name: "Fantasma",
-    source: ghostImpostorUrl,
-    column: 13,
-    row: 6,
-    height: 1.5,
-    health: 12,
-    attack: 5,
-    defense: 1,
-    sight: 7,
-    drop: "spirit_tonic",
-  },
-  {
-    name: "Demone del magma",
-    source: magmaDemonImpostorUrl,
-    column: 9,
-    row: 5,
-    height: 1.55,
-    health: 18,
-    attack: 7,
-    defense: 2,
-    sight: 6,
-    drop: "ember_blade",
-  },
-  {
-    name: "Lich",
-    source: lichImpostorUrl,
-    column: 8,
-    row: 13,
-    height: 1.5,
-    health: 24,
-    attack: 8,
-    defense: 3,
-    sight: 8,
-    drop: "bone_mail",
-  },
-];
-
-const torchPlacements = [
-  { column: 5, row: 2, offset: v(0.9, 0.78, 0), lightOffset: v(0.64, 1.25, 0), rotation: Math.PI / 2 },
-  { column: 7, row: 2, offset: v(-0.9, 0.78, 0), lightOffset: v(-0.64, 1.25, 0), rotation: -Math.PI / 2 },
-  { column: 5, row: 6, offset: v(-0.9, 0.78, 0), lightOffset: v(-0.64, 1.25, 0), rotation: -Math.PI / 2 },
-  { column: 9, row: 7, offset: v(0.9, 0.78, 0), lightOffset: v(0.64, 1.25, 0), rotation: Math.PI / 2 },
-  { column: 5, row: 12, offset: v(0.9, 0.78, 0), lightOffset: v(0.64, 1.25, 0), rotation: Math.PI / 2 },
-  { column: 7, row: 12, offset: v(-0.9, 0.78, 0), lightOffset: v(-0.64, 1.25, 0), rotation: -Math.PI / 2 },
-] as const;
-
-function buildDungeon(): MeshInstance[] {
-  const instances: MeshInstance[] = [];
-  for (let row = 0; row < LEVEL.length; row += 1) {
-    for (let column = 0; column < (LEVEL[row]?.length ?? 0); column += 1) {
-      if (!hasFloor(column, row)) continue;
-      const center = cellPosition(column, row);
-
-      // Il modulo pavimento è spesso 0.26: duplicato in alto chiude il soffitto.
-      instances.push(createMeshInstance(floorMesh, add(center, v(0, -0.13, 0))));
-      instances.push(createMeshInstance(floorMesh, add(center, v(0, 2.13, 0))));
-
-      if (!hasFloor(column, row - 1)) {
-        instances.push(createMeshInstance(wallMesh, add(center, v(0, 1, -1))));
-      }
-      if (!hasFloor(column, row + 1)) {
-        instances.push(createMeshInstance(wallMesh, add(center, v(0, 1, 1)), 1, Math.PI));
-      }
-      if (!hasFloor(column - 1, row)) {
-        instances.push(createMeshInstance(wallMesh, add(center, v(-1, 1, 0)), 1, Math.PI / 2));
-      }
-      if (!hasFloor(column + 1, row)) {
-        instances.push(createMeshInstance(wallMesh, add(center, v(1, 1, 0)), 1, -Math.PI / 2));
-      }
-    }
-  }
-
-  for (const archCell of findCells("A")) {
-    instances.push(createMeshInstance(
-      archMesh,
-      cellPosition(archCell.column, archCell.row),
-      0.5,
-      Math.PI / 2,
-    ));
-  }
-
-  for (const fireCell of findCells("F")) {
-    instances.push(createMeshInstance(
-      woodfireMesh,
-      add(cellPosition(fireCell.column, fireCell.row), v(0, 0.04, 0)),
-      0.92,
-    ));
-  }
-
-  for (const columnCell of findCells("C")) {
-    instances.push(createMeshInstance(
-      columnMesh,
-      cellPosition(columnCell.column, columnCell.row),
-      0.49,
-    ));
-  }
-
-  for (const torch of torchPlacements) {
-    instances.push(createMeshInstance(
-      torchMesh,
-      add(cellPosition(torch.column, torch.row), torch.offset),
-      0.78,
-      torch.rotation,
-    ));
-  }
-
-  const goal = cellPosition(goalCell.column, goalCell.row);
-  instances.push(createMeshInstance(archMesh, add(goal, v(0, 0, -1)), 0.5));
-  instances.push(createMeshInstance(chestMesh, add(goal, v(0, 0.01, 0.68)), 0.88, Math.PI));
-
-  const trap = cellPosition(trapCell.column, trapCell.row);
-  // Abbassati sotto l'altezza occhi: il giocatore può attraversare la cella ferendosi.
-  instances.push(createMeshInstance(spikesMesh, add(trap, v(0, -0.2, 0)), 0.72));
-  return instances;
-}
-
-const dungeonInstances = buildDungeon();
-const dungeonScene = createMeshScene(dungeonInstances);
-
-const staticLights: readonly SceneLight[] = [
-  ...findCells("F").map((cell, index) => ({
-    position: add(cellPosition(cell.column, cell.row), v(0, 0.52, 0)),
-    color: v(1, 0.24, 0.035),
-    intensity: 24,
-    radius: 0.2,
-    phase: index * 1.71,
-    flicker: 0.16,
-  })),
-  ...torchPlacements.map((torch, index) => ({
-    position: add(cellPosition(torch.column, torch.row), torch.lightOffset),
-    color: v(1, 0.38, 0.08),
-    intensity: 13,
-    radius: 0.09,
-    phase: 2.3 + index * 1.37,
-    flicker: 0.11,
-  })),
-];
-
-let randomState = 1;
-
-function random(): number {
-  randomState ^= randomState << 13;
-  randomState ^= randomState >>> 17;
-  randomState ^= randomState << 5;
-  return (randomState >>> 0) / 4294967296;
-}
-
-function randomUnitVector(): Vec3 {
-  const z = random() * 2 - 1;
-  const angle = random() * Math.PI * 2;
-  const radius = Math.sqrt(Math.max(0, 1 - z * z));
-  return v(radius * Math.cos(angle), radius * Math.sin(angle), z);
-}
-
-function cosineHemisphere(normal: Vec3): Vec3 {
-  const helper = Math.abs(normal.x) > 0.9 ? v(0, 1, 0) : v(1, 0, 0);
-  const tangent = normalize(cross(helper, normal));
-  const bitangent = cross(normal, tangent);
-  const angle = random() * Math.PI * 2;
-  const radius = Math.sqrt(random());
-  const local = v(
-    radius * Math.cos(angle),
-    Math.sqrt(Math.max(0, 1 - radius * radius)),
-    radius * Math.sin(angle),
-  );
-  return normalize(add(add(mul(tangent, local.x), mul(normal, local.y)), mul(bitangent, local.z)));
-}
-
-function sceneHit(ray: Ray, minDistance = EPSILON, maxDistance = Infinity): Hit | null {
-  return hitMeshScene(ray, dungeonScene, minDistance, maxDistance);
-}
-
-function refract(direction: Vec3, normal: Vec3, eta: number): Vec3 {
-  const cosine = Math.min(dot(mul(direction, -1), normal), 1);
-  const perpendicular = mul(add(direction, mul(normal, cosine)), eta);
-  const parallel = mul(normal, -Math.sqrt(Math.abs(1 - dot(perpendicular, perpendicular))));
-  return add(perpendicular, parallel);
-}
-
-function schlick(cosine: number, ior: number): number {
-  const reflectance = ((1 - ior) / (1 + ior)) ** 2;
-  return reflectance + (1 - reflectance) * (1 - cosine) ** 5;
-}
-
-const camera = {
+// Stato camera e riferimenti all'interfaccia.
+const camera: Camera = {
   position: cellPosition(startCell.column, startCell.row, EYE_HEIGHT),
   yaw: Math.PI,
   pitch: 0,
@@ -552,124 +91,6 @@ const playerLight: SceneLight = {
 };
 
 let renderTimeSeconds = 0;
-
-function flickerMultiplier(light: SceneLight): number {
-  return 1 + light.flicker * (
-    Math.sin(renderTimeSeconds * 8.7 + light.phase) * 0.65 +
-    Math.sin(renderTimeSeconds * 17.3 + light.phase * 2.1) * 0.35
-  );
-}
-
-function directLight(hit: Hit, light: SceneLight, selectionProbability: number): Vec3 {
-  const lightSample = add(light.position, mul(randomUnitVector(), light.radius));
-  const toLight = sub(lightSample, hit.point);
-  const distanceSquared = dot(toLight, toLight);
-  const distanceToLight = Math.sqrt(distanceSquared);
-  const lightDirection = mul(toLight, 1 / Math.max(distanceToLight, EPSILON));
-  const cosine = Math.max(0, dot(hit.normal, lightDirection));
-  if (cosine <= 0) return v();
-
-  const shadowOrigin = add(hit.point, mul(hit.normal, EPSILON * 3));
-  const blocker = sceneHit({ origin: shadowOrigin, direction: lightDirection }, EPSILON, distanceToLight);
-  if (blocker && blocker.material.kind !== "emissive") return v();
-
-  const intensity = light.intensity * flickerMultiplier(light);
-  return mul(
-    light.color,
-    (cosine * intensity) /
-      (Math.max(0.35, distanceSquared) * Math.max(selectionProbability, 1e-6)),
-  );
-}
-
-function sampleLight(hit: Hit): Vec3 {
-  const lightCount = staticLights.length + 1;
-  let totalWeight = 0;
-  for (let index = 0; index < lightCount; index += 1) {
-    const light = index === 0 ? playerLight : staticLights[index - 1];
-    if (!light) continue;
-    const offset = sub(light.position, hit.point);
-    const distanceSquared = dot(offset, offset);
-    totalWeight += light.intensity / Math.max(0.5, distanceSquared);
-  }
-
-  let threshold = random() * totalWeight;
-  for (let index = 0; index < lightCount; index += 1) {
-    const light = index === 0 ? playerLight : staticLights[index - 1];
-    if (!light) continue;
-    const offset = sub(light.position, hit.point);
-    const weight = light.intensity / Math.max(0.5, dot(offset, offset));
-    threshold -= weight;
-    if (threshold <= 0 || index === lightCount - 1) {
-      return directLight(hit, light, weight / Math.max(totalWeight, 1e-6));
-    }
-  }
-  return v();
-}
-
-function dungeonDarkness(direction: Vec3): Vec3 {
-  const lift = Math.max(0, direction.y) * 0.008;
-  return v(0.004 + lift, 0.005 + lift, 0.009 + lift * 1.5);
-}
-
-function trace(initialRay: Ray): Vec3 {
-  let ray = initialRay;
-  let throughput = v(1, 1, 1);
-  let radiance = v();
-
-  for (let bounce = 0; bounce < MAX_BOUNCES; bounce += 1) {
-    const hit = sceneHit(ray);
-    if (!hit) {
-      radiance = add(radiance, multiply(throughput, dungeonDarkness(ray.direction)));
-      break;
-    }
-
-    if (hit.material.kind === "emissive") {
-      radiance = add(radiance, mul(multiply(throughput, hit.material.color), hit.material.emission ?? 1));
-      break;
-    }
-
-    if (hit.material.kind === "diffuse") {
-      radiance = add(
-        radiance,
-        multiply(throughput, multiply(hit.material.color, sampleLight(hit))),
-      );
-      throughput = multiply(throughput, hit.material.color);
-      ray = {
-        origin: add(hit.point, mul(hit.normal, EPSILON * 3)),
-        direction: cosineHemisphere(hit.normal),
-      };
-    } else if (hit.material.kind === "metal") {
-      const reflected = reflect(ray.direction, hit.normal);
-      const scattered = normalize(add(reflected, mul(randomUnitVector(), hit.material.roughness ?? 0)));
-      if (dot(scattered, hit.normal) <= 0) break;
-      throughput = multiply(throughput, hit.material.color);
-      ray = {
-        origin: add(hit.point, mul(hit.normal, EPSILON * 3)),
-        direction: scattered,
-      };
-    } else {
-      const ior = hit.material.ior ?? 1.5;
-      const eta = hit.frontFace ? 1 / ior : ior;
-      const cosine = Math.min(dot(mul(ray.direction, -1), hit.normal), 1);
-      const cannotRefract = eta * Math.sqrt(Math.max(0, 1 - cosine * cosine)) > 1;
-      const direction = cannotRefract || schlick(cosine, ior) > random()
-        ? reflect(ray.direction, hit.normal)
-        : refract(ray.direction, hit.normal, eta);
-      throughput = multiply(throughput, hit.material.color);
-      ray = {
-        origin: add(hit.point, mul(direction, EPSILON * 3)),
-        direction: normalize(direction),
-      };
-    }
-
-    if (bounce >= 2) {
-      const survival = Math.min(0.94, Math.max(throughput.x, throughput.y, throughput.z));
-      if (random() > survival) break;
-      throughput = mul(throughput, 1 / Math.max(0.01, survival));
-    }
-  }
-  return radiance;
-}
 
 const canvasElement = document.querySelector<HTMLCanvasElement>("#app");
 const impostorCanvas = document.querySelector<HTMLCanvasElement>("#impostors");
@@ -708,66 +129,13 @@ if (!impostorContextValue) throw new Error("Contesto impostori 2D non disponibil
 const impostorContext = impostorContextValue;
 impostorContext.imageSmoothingEnabled = true;
 
-function createEnemies(): Enemy[] {
-  return enemyTemplates.map((template, index) => {
-    const image = new Image();
-    image.decoding = "async";
-    image.src = template.source;
-    return {
-      ...template,
-      id: index + 1,
-      currentHealth: template.health,
-      alerted: false,
-      alive: true,
-      image,
-    };
-  });
-}
-
-let nextItemInstanceId = 1;
-
-function createItem(definitionId: ItemId): InventoryItem {
-  return { instanceId: nextItemInstanceId++, definitionId };
-}
-
-function createPlayer(): Player {
-  const weapon = createItem("rusty_sword");
-  const armor = createItem("leather_armor");
-  const potion = createItem("healing_potion");
-  return {
-    column: startCell.column,
-    row: startCell.row,
-    facing: 2,
-    maxHealth: 30,
-    health: 30,
-    baseAttack: 3,
-    baseDefense: 0,
-    turns: 0,
-    dead: false,
-    won: false,
-    inventory: [weapon, armor, potion],
-    weaponInstanceId: weapon.instanceId,
-    armorInstanceId: armor.instanceId,
-  };
-}
-
-function createGroundItems(): GroundItem[] {
-  return [
-    { ...createItem("iron_sword"), column: 5, row: 1 },
-    { ...createItem("healing_potion"), column: 3, row: 9 },
-  ];
-}
-
+const entityFactory = new GameEntityFactory();
 let enemies = createEnemies();
-let player = createPlayer();
-let groundItems = createGroundItems();
+let player = entityFactory.createPlayer();
+let groundItems = entityFactory.createGroundItems();
+const cpuRenderer = new CpuPathTracer(context, renderSize, staticLights);
 
-let image = context.createImageData(renderSize, renderSize);
-let accumulation = new Float32Array(renderSize * renderSize * 3);
-let resolved = new Float32Array(renderSize * renderSize * 3);
-let denoisedA = new Float32Array(renderSize * renderSize * 3);
-let denoisedB = new Float32Array(renderSize * renderSize * 3);
-
+// Stato transitorio della partita e del loop.
 const actionQueue: QueuedAction[] = [];
 const triggeredTraps = new Set<string>();
 const combatMessages: string[] = [];
@@ -779,7 +147,6 @@ let lastLookY = 0;
 let statusMessage = "Trova il baule oltre il labirinto";
 let statusUntil = 0;
 let samples = 0;
-let lastTime = performance.now();
 let cameraDirty = true;
 let paused = false;
 let gpuRenderer: WebGpuRenderer | null = null;
@@ -787,281 +154,6 @@ let packedSceneCache: ReturnType<typeof packMeshScene> | null = null;
 let resolutionChanging = false;
 let inventoryOpen = false;
 let gameplayRandomState = 0x51f15e;
-
-function resetAccumulation(): void {
-  accumulation.fill(0);
-  samples = 0;
-}
-
-function cameraBasis(): { forward: Vec3; right: Vec3; up: Vec3 } {
-  const pitchCosine = Math.cos(camera.pitch);
-  const forward = normalize(v(
-    Math.sin(camera.yaw) * pitchCosine,
-    Math.sin(camera.pitch),
-    -Math.cos(camera.yaw) * pitchCosine,
-  ));
-  const right = normalize(cross(forward, v(0, 1, 0)));
-  return { forward, right, up: normalize(cross(right, forward)) };
-}
-
-function projectPoint(
-  point: Vec3,
-  { forward, right, up }: ReturnType<typeof cameraBasis>,
-): { x: number; y: number; depth: number } | null {
-  const relative = sub(point, camera.position);
-  const depth = dot(relative, forward);
-  if (depth <= 0.03) return null;
-  const scale = Math.tan(camera.fov * 0.5);
-  return {
-    x: (0.5 + dot(relative, right) / (depth * scale * 2)) * renderSize,
-    y: (0.5 - dot(relative, up) / (depth * scale * 2)) * renderSize,
-    depth,
-  };
-}
-
-function renderImpostors(): void {
-  impostorContext.clearRect(0, 0, renderSize, renderSize);
-  impostorContext.imageSmoothingEnabled = true;
-  const basis = cameraBasis();
-  const projected = enemies.flatMap((enemy) => {
-    if (!enemy.alive || !enemy.image.complete || enemy.image.naturalWidth === 0) return [];
-    const base = add(cellPosition(enemy.column, enemy.row), v(0, 0.015, 0));
-    const center = add(base, v(0, enemy.height * 0.5, 0));
-    const centerOnScreen = projectPoint(center, basis);
-    const topOnScreen = projectPoint(add(base, v(0, enemy.height, 0)), basis);
-    const bottomOnScreen = projectPoint(base, basis);
-    if (!centerOnScreen || !topOnScreen || !bottomOnScreen) return [];
-    const height = Math.abs(bottomOnScreen.y - topOnScreen.y);
-    const width = height * (enemy.image.naturalWidth / enemy.image.naturalHeight);
-    if (height < 0.5 || centerOnScreen.x + width < 0 || centerOnScreen.x - width > renderSize) return [];
-    return [{
-      enemy,
-      image: enemy.image,
-      center,
-      depth: centerOnScreen.depth,
-      x: centerOnScreen.x - width * 0.5,
-      centerY: centerOnScreen.y,
-      y: Math.min(topOnScreen.y, bottomOnScreen.y),
-      width,
-      height,
-    }];
-  }).sort((left, right) => right.depth - left.depth);
-
-  for (const impostor of projected) {
-    const brightness = Math.max(0.42, Math.min(0.88, 0.96 - impostor.depth * 0.035));
-    impostorContext.filter = `brightness(${brightness}) saturate(0.88)`;
-    const firstColumn = Math.max(0, Math.floor(impostor.x));
-    const lastColumn = Math.min(renderSize, Math.ceil(impostor.x + impostor.width));
-    const planeNormal = normalize(v(
-      camera.position.x - impostor.center.x,
-      0,
-      camera.position.z - impostor.center.z,
-    ));
-    const planeDistance = dot(sub(impostor.center, camera.position), planeNormal);
-    let visibleColumns = 0;
-
-    for (let column = firstColumn; column < lastColumn; column += 1) {
-      const ray = cameraRay(column, impostor.centerY - 0.5, basis, true);
-      const denominator = dot(ray.direction, planeNormal);
-      if (Math.abs(denominator) < 1e-5) continue;
-      const spriteDistance = planeDistance / denominator;
-      if (spriteDistance <= EPSILON) continue;
-      const blocker = sceneHit(ray, EPSILON, spriteDistance);
-      if (blocker && blocker.distance < spriteDistance - 0.025) continue;
-      visibleColumns += 1;
-
-      const sourceX = ((column - impostor.x) / impostor.width) * impostor.image.naturalWidth;
-      const sourceWidth = impostor.image.naturalWidth / impostor.width;
-      impostorContext.drawImage(
-        impostor.image,
-        sourceX,
-        0,
-        sourceWidth,
-        impostor.image.naturalHeight,
-        column,
-        impostor.y,
-        1,
-        impostor.height,
-      );
-    }
-
-    if (visibleColumns > 0 && impostor.enemy.currentHealth < impostor.enemy.health) {
-      const barWidth = Math.max(3, impostor.width * 0.72);
-      const barX = impostor.x + (impostor.width - barWidth) * 0.5;
-      const barY = impostor.y - 2;
-      impostorContext.filter = "none";
-      impostorContext.fillStyle = "#170705";
-      impostorContext.fillRect(barX - 0.5, barY - 0.5, barWidth + 1, 2);
-      impostorContext.fillStyle = "#b94332";
-      impostorContext.fillRect(
-        barX,
-        barY,
-        barWidth * (impostor.enemy.currentHealth / impostor.enemy.health),
-        1,
-      );
-    }
-  }
-  impostorContext.filter = "none";
-  impostorContext.imageSmoothingEnabled = false;
-
-  for (const groundItem of groundItems) {
-    const point = add(cellPosition(groundItem.column, groundItem.row), v(0, 0.12, 0));
-    const onScreen = projectPoint(point, basis);
-    if (!onScreen) continue;
-    const toItem = sub(point, camera.position);
-    const distance = length(toItem);
-    const blocker = sceneHit(
-      { origin: camera.position, direction: mul(toItem, 1 / Math.max(distance, EPSILON)) },
-      EPSILON,
-      distance,
-    );
-    if (blocker && blocker.distance < distance - 0.025) continue;
-    const definition = ITEM_DEFINITIONS[groundItem.definitionId];
-    const icon = itemIconImages.get(groundItem.definitionId);
-    const size = Math.max(3, Math.min(7, Math.round(13 / onScreen.depth)));
-    const x = Math.round(onScreen.x - size * 0.5);
-    const y = Math.round(onScreen.y - size * 0.72);
-
-    if (icon?.complete && icon.naturalWidth > 0) {
-      impostorContext.drawImage(icon, x, y, size, size);
-    } else {
-      impostorContext.fillStyle = definition.kind === "consumable"
-        ? "#b94332"
-        : definition.kind === "weapon" ? "#c9b28c" : "#8c633d";
-      impostorContext.fillRect(x, y, size, size);
-    }
-  }
-
-  impostorContext.imageSmoothingEnabled = true;
-}
-
-function cameraRay(
-  x: number,
-  y: number,
-  { forward, right, up }: ReturnType<typeof cameraBasis>,
-  stablePrimary = false,
-): Ray {
-  const sampleX = stablePrimary ? 0.5 : random();
-  const sampleY = stablePrimary ? 0.5 : random();
-  const scale = Math.tan(camera.fov * 0.5);
-  const screenX = (2 * ((x + sampleX) / renderSize) - 1) * scale;
-  const screenY = (1 - 2 * ((y + sampleY) / renderSize)) * scale;
-  const pinholeDirection = normalize(add(add(forward, mul(right, screenX)), mul(up, screenY)));
-  if (stablePrimary) return { origin: camera.position, direction: pinholeDirection };
-
-  const lensAngle = random() * Math.PI * 2;
-  const lensRadius = Math.sqrt(random()) * camera.aperture;
-  const lensOffset = add(
-    mul(right, Math.cos(lensAngle) * lensRadius),
-    mul(up, Math.sin(lensAngle) * lensRadius),
-  );
-  const focusPoint = add(camera.position, mul(pinholeDirection, camera.focusDistance));
-  const origin = add(camera.position, lensOffset);
-  return { origin, direction: normalize(sub(focusPoint, origin)) };
-}
-
-function aces(value: number): number {
-  const a = 2.51;
-  const b = 0.03;
-  const c = 2.43;
-  const d = 0.59;
-  const e = 0.14;
-  return Math.max(0, Math.min(1, (value * (a * value + b)) / (value * (c * value + d) + e)));
-}
-
-function renderSample(stablePrimary = false): void {
-  const basis = cameraBasis();
-  for (let y = 0; y < renderSize; y += 1) {
-    for (let x = 0; x < renderSize; x += 1) {
-      const pixel = y * renderSize + x;
-      randomState = ((pixel + 1) * 0x9e3779b1 ^ (samples + 1) * 0x85ebca6b) | 1;
-      const color = trace(cameraRay(x, y, basis, stablePrimary));
-      const accumulator = pixel * 3;
-      accumulation[accumulator] = (accumulation[accumulator] ?? 0) + color.x;
-      accumulation[accumulator + 1] = (accumulation[accumulator + 1] ?? 0) + color.y;
-      accumulation[accumulator + 2] = (accumulation[accumulator + 2] ?? 0) + color.z;
-    }
-  }
-  samples += 1;
-}
-
-function writePixel(pixel: number, color: Vec3): void {
-  const output = pixel * 4;
-  const red = aces(color.x * 1.35);
-  const green = aces(color.y * 1.35);
-  const blue = aces(color.z * 1.35);
-  image.data[output] = Math.round(Math.sqrt(red) * 255);
-  image.data[output + 1] = Math.round(Math.sqrt(green) * 255);
-  image.data[output + 2] = Math.round(Math.sqrt(blue) * 255);
-  image.data[output + 3] = 255;
-}
-
-function denoisePass(source: Float32Array, target: Float32Array, step: number, sigma: number): void {
-  const sigmaSquared = sigma * sigma;
-  for (let y = 0; y < renderSize; y += 1) {
-    for (let x = 0; x < renderSize; x += 1) {
-      const center = (y * renderSize + x) * 3;
-      const centerR = source[center] ?? 0;
-      const centerG = source[center + 1] ?? 0;
-      const centerB = source[center + 2] ?? 0;
-      let red = 0;
-      let green = 0;
-      let blue = 0;
-      let totalWeight = 0;
-
-      for (let offsetY = -1; offsetY <= 1; offsetY += 1) {
-        const sampleY = Math.max(0, Math.min(renderSize - 1, y + offsetY * step));
-        for (let offsetX = -1; offsetX <= 1; offsetX += 1) {
-          const sampleX = Math.max(0, Math.min(renderSize - 1, x + offsetX * step));
-          const sample = (sampleY * renderSize + sampleX) * 3;
-          const sampleR = source[sample] ?? 0;
-          const sampleG = source[sample + 1] ?? 0;
-          const sampleB = source[sample + 2] ?? 0;
-          const difference =
-            (sampleR - centerR) ** 2 +
-            (sampleG - centerG) ** 2 +
-            (sampleB - centerB) ** 2;
-          const spatial = offsetX === 0 && offsetY === 0 ? 4 : offsetX === 0 || offsetY === 0 ? 2 : 1;
-          const weight = spatial * Math.exp(-difference / Math.max(0.001, sigmaSquared));
-          red += sampleR * weight;
-          green += sampleG * weight;
-          blue += sampleB * weight;
-          totalWeight += weight;
-        }
-      }
-      target[center] = red / totalWeight;
-      target[center + 1] = green / totalWeight;
-      target[center + 2] = blue / totalWeight;
-    }
-  }
-}
-
-function present(): void {
-  const inverseSamples = 1 / Math.max(1, samples);
-  for (let pixel = 0; pixel < renderSize * renderSize; pixel += 1) {
-    const index = pixel * 3;
-    resolved[index] = (accumulation[index] ?? 0) * inverseSamples;
-    resolved[index + 1] = (accumulation[index + 1] ?? 0) * inverseSamples;
-    resolved[index + 2] = (accumulation[index + 2] ?? 0) * inverseSamples;
-  }
-
-  const denoiseStrength = Math.max(0, 1 - samples / DENOISE_UNTIL_SAMPLES);
-  if (denoiseStrength > 0) {
-    denoisePass(resolved, denoisedA, 1, 0.7);
-    denoisePass(denoisedA, denoisedB, 2, 0.45);
-  }
-
-  for (let pixel = 0; pixel < renderSize * renderSize; pixel += 1) {
-    const index = pixel * 3;
-    writePixel(pixel, v(
-      (resolved[index] ?? 0) * (1 - denoiseStrength) + (denoisedB[index] ?? 0) * denoiseStrength,
-      (resolved[index + 1] ?? 0) * (1 - denoiseStrength) + (denoisedB[index + 1] ?? 0) * denoiseStrength,
-      (resolved[index + 2] ?? 0) * (1 - denoiseStrength) + (denoisedB[index + 2] ?? 0) * denoiseStrength,
-    ));
-  }
-  context.putImageData(image, 0, 0);
-  if (sampleLabel) sampleLabel.textContent = `${samples} spp`;
-}
 
 function markCameraChanged(): void {
   cameraDirty = true;
@@ -1115,6 +207,7 @@ function itemDescription(item: InventoryItem): string {
   return `${definition.name} · cura ${definition.healing ?? 0}`;
 }
 
+/** Ricostruisce il pannello a partire dall'inventario corrente. */
 function renderInventoryPanel(): void {
   const weapon = inventoryItem(player.weaponInstanceId);
   const armor = inventoryItem(player.armorInstanceId);
@@ -1200,10 +293,11 @@ function attackEnemy(enemy: Enemy): void {
   if (enemy.currentHealth > 0) return;
 
   enemy.alive = false;
-  groundItems.push({ ...createItem(enemy.drop), column: enemy.column, row: enemy.row });
+  groundItems.push({ ...entityFactory.createItem(enemy.drop), column: enemy.column, row: enemy.row });
   addCombatMessage(`${enemy.name} muore e lascia ${ITEM_DEFINITIONS[enemy.drop].name}.`, 2400);
 }
 
+/** Trova con BFS il primo passo di un nemico verso il giocatore. */
 function findEnemyPath(enemy: Enemy): { step: Cell; distance: number } | null {
   const startKey = `${enemy.column},${enemy.row}`;
   const queue: Array<{ cell: Cell; first: Cell | null; distance: number }> = [{
@@ -1254,6 +348,7 @@ function runEnemyTurns(): void {
   }
 }
 
+/** Chiude il turno del giocatore ed esegue, in ordine, tutti i nemici vivi. */
 function finishPlayerTurn(): void {
   player.turns += 1;
   if (!player.dead && !player.won) runEnemyTurns();
@@ -1315,6 +410,7 @@ function enqueue(action: QueuedAction): void {
   actionQueue.push(action);
 }
 
+/** Traduce il prossimo comando accodato in movimento, rotazione o attacco. */
 function beginNextAction(now: number): void {
   const action = actionQueue.shift();
   if (!action) return;
@@ -1395,6 +491,7 @@ function enteredCell(): void {
   }
 }
 
+/** Riallinea visuale e zoom alla griglia soltanto quando inizia un movimento. */
 function updateViewSnap(now: number): void {
   if (!viewSnap) return;
   const linearProgress = Math.min(1, (now - viewSnap.startedAt) / VIEW_RESET_DURATION);
@@ -1459,8 +556,8 @@ function updateHud(now: number): void {
   }
 }
 
+/** Loop principale: simulazione, renderer disponibile, overlay e nuovo frame. */
 function frame(now: number): void {
-  lastTime = now;
   renderTimeSeconds = now / 1000;
   updateGame(now);
   updateHud(now);
@@ -1469,7 +566,7 @@ function frame(now: number): void {
   if (resolutionChanging) {
     if (sampleLabel) sampleLabel.textContent = `${samples} spp · cambio risoluzione`;
   } else if (gpuRenderer && !paused) {
-    const basis = cameraBasis();
+    const basis = cameraBasis(camera);
     samples = gpuRenderer.render({
       position: camera.position,
       forward: basis.forward,
@@ -1488,17 +585,23 @@ function frame(now: number): void {
   } else if (gpuRenderer && paused) {
     if (sampleLabel) sampleLabel.textContent = `${samples} spp · GPU · pausa`;
   } else if (cameraDirty) {
-    resetAccumulation();
-    for (let sample = 0; sample < MOTION_SAMPLES; sample += 1) renderSample(true);
+    cpuRenderer.reset();
+    for (let sample = 0; sample < MOTION_SAMPLES; sample += 1) {
+      cpuRenderer.renderSample(camera, playerLight, renderTimeSeconds, true);
+    }
+    samples = cpuRenderer.samples;
     cameraDirty = false;
-    present();
+    cpuRenderer.present();
+    if (sampleLabel) sampleLabel.textContent = `${samples} spp`;
   } else if (!paused) {
-    renderSample();
-    present();
+    cpuRenderer.renderSample(camera, playerLight, renderTimeSeconds);
+    samples = cpuRenderer.samples;
+    cpuRenderer.present();
+    if (sampleLabel) sampleLabel.textContent = `${samples} spp`;
   } else if (sampleLabel) {
     sampleLabel.textContent = `${samples} spp · pausa`;
   }
-  renderImpostors();
+  drawImpostors({ context: impostorContext, renderSize, camera, enemies, groundItems });
   requestAnimationFrame(frame);
 }
 
@@ -1514,11 +617,7 @@ function resizeCpuRenderer(resolution: RenderResolution): void {
   spriteCanvas.height = renderSize;
   context.imageSmoothingEnabled = false;
   impostorContext.imageSmoothingEnabled = true;
-  image = context.createImageData(renderSize, renderSize);
-  accumulation = new Float32Array(renderSize * renderSize * 3);
-  resolved = new Float32Array(renderSize * renderSize * 3);
-  denoisedA = new Float32Array(renderSize * renderSize * 3);
-  denoisedB = new Float32Array(renderSize * renderSize * 3);
+  cpuRenderer.resize(renderSize);
   samples = 0;
   cameraDirty = true;
   updateResolutionButton();
@@ -1573,9 +672,9 @@ async function cycleResolution(): Promise<void> {
 }
 
 function restart(): void {
-  nextItemInstanceId = 1;
-  player = createPlayer();
-  groundItems = createGroundItems();
+  entityFactory.reset();
+  player = entityFactory.createPlayer();
+  groundItems = entityFactory.createGroundItems();
   enemies = createEnemies();
   gameplayRandomState = 0x51f15e;
   triggeredTraps.clear();
