@@ -147,6 +147,97 @@
       #health { color: #b85b46; }
       #samples { color: #a97839; }
 
+      #combat-log {
+        position: absolute;
+        top: 4%;
+        left: 4%;
+        max-width: 72%;
+        color: #c89a61;
+        font-size: 8px;
+        line-height: 1.45;
+        text-shadow: 1px 1px #000;
+        pointer-events: none;
+      }
+
+      #combat-log div:last-child { color: #f0c77d; }
+
+      #inventory {
+        position: absolute;
+        inset: 7%;
+        z-index: 3;
+        overflow: auto;
+        padding: 10px;
+        border: 1px solid #8f6337;
+        background: #080503ed;
+        box-shadow: 0 8px 30px #000;
+        cursor: default;
+      }
+
+      #inventory[hidden] { display: none; }
+
+      #inventory h2 {
+        margin: 0 0 7px;
+        color: #d99b45;
+        font-size: 11px;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+      }
+
+      #equipment {
+        margin-bottom: 8px;
+        color: #9d825d;
+        font-size: 8px;
+        line-height: 1.5;
+        text-transform: uppercase;
+      }
+
+      #inventory-items {
+        display: grid;
+        gap: 3px;
+      }
+
+      .inventory-item {
+        display: grid;
+        grid-template-columns: 20px minmax(0, 1fr);
+        align-items: center;
+        gap: 6px;
+        width: 100%;
+        padding: 4px 5px;
+        border: 1px solid #4d3825;
+        background: #130c08;
+        color: #c9b28c;
+        font: inherit;
+        font-size: 8px;
+        text-align: left;
+        cursor: pointer;
+      }
+
+      .inventory-icon {
+        display: block;
+        width: 20px;
+        height: 20px;
+        object-fit: cover;
+        image-rendering: crisp-edges;
+        image-rendering: pixelated;
+      }
+
+      .inventory-item:hover,
+      .inventory-item:focus-visible {
+        border-color: #a9763c;
+        color: #f0c77d;
+        outline: none;
+      }
+
+      .inventory-item:disabled { cursor: wait; opacity: 0.55; }
+
+      .inventory-help {
+        margin: 8px 0 0;
+        color: #695640;
+        font-size: 7px;
+        line-height: 1.5;
+        text-transform: uppercase;
+      }
+
       .help {
         position: fixed;
         right: 12px;
@@ -177,7 +268,14 @@
         <canvas id="app" width="64" height="64" aria-label="Dungeon crawler ray traced"></canvas>
         <canvas id="impostors" width="64" height="64" aria-hidden="true"></canvas>
         <div class="crosshair" aria-hidden="true"></div>
+        <div id="combat-log" aria-live="polite"></div>
         <div id="message">Trova il baule</div>
+        <aside id="inventory" aria-label="Inventario" hidden>
+          <h2>Inventario</h2>
+          <div id="equipment"></div>
+          <div id="inventory-items"></div>
+          <p class="inventory-help">1–8 usa o equipaggia · I/Esc chiude · ogni uso consuma un turno</p>
+        </aside>
       </div>
       <div class="statusbar">
         <span id="health">Vita 100</span>
@@ -185,7 +283,7 @@
       </div>
     </main>
     <div class="help">
-      Trascina per guardarti intorno · Rotellina zoom · W/S muovi · A/D gira 90° · Q/E strafing · R ricomincia
+      W/S muovi · A/D gira · Q/E strafing · Spazio attendi · I inventario · P pausa · R ricomincia
     </div>
     <script type="module" src="./index.ts"></script>
   </body>

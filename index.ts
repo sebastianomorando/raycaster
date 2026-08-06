@@ -1,16 +1,18 @@
 import archSource from "./ModularDungeon/OBJ/Arch.obj" with { type: "text" };
-import batSource from "./Monsters/OBJ/Bat.obj" with { type: "text" };
 import chestSource from "./ModularDungeon/OBJ/Chest.obj" with { type: "text" };
 import columnSource from "./ModularDungeon/OBJ/Column.obj" with { type: "text" };
-import dragonSource from "./Monsters/OBJ/Dragon.obj" with { type: "text" };
 import ghostImpostorUrl from "./fantasycharacters/FantasyCharacters_ghost.png";
 import impImpostorUrl from "./fantasycharacters/FantasyCharacters_imp.png";
 import lichImpostorUrl from "./fantasycharacters/FantasyCharacters_lich.png";
 import magmaDemonImpostorUrl from "./fantasycharacters/FantasyCharacters_magma_demon.png";
-import spiderSource from "./EasyEnemies/OBJ/Spider.obj" with { type: "text" };
+import boneMailIconUrl from "./icons/Armor/Head_Helmet_Dragon.png";
+import leatherArmorIconUrl from "./icons/Armor/Chest_Cloth_Torn.png";
+import healingPotionIconUrl from "./icons/Potions/Minor_Potion_health.png";
+import spiritTonicIconUrl from "./icons/Potions/Major_Potion_mana.png";
+import emberBladeIconUrl from "./icons/Weapons/Sword_fire.png";
+import ironSwordIconUrl from "./icons/Weapons/Sword.png";
+import rustySwordIconUrl from "./icons/Weapons/Sword_Rusty.png";
 import floorSource from "./ModularDungeon/OBJ/Floor_Modular.obj" with { type: "text" };
-import skeletonSource from "./Monsters/OBJ/Skeleton.obj" with { type: "text" };
-import slimeSource from "./Monsters/OBJ/Slime.obj" with { type: "text" };
 import spikesSource from "./ModularDungeon/OBJ/Trap_spikes.obj" with { type: "text" };
 import torchSource from "./ModularDungeon/OBJ/Torch.obj" with { type: "text" };
 import wallSource from "./ModularDungeon/OBJ/Wall_Modular.obj" with { type: "text" };
@@ -42,6 +44,7 @@ const DEFAULT_FOV = 58 * (Math.PI / 180);
 const MIN_FOV = 30 * (Math.PI / 180);
 const MAX_FOV = 90 * (Math.PI / 180);
 const ZOOM_SENSITIVITY = 0.0008;
+const INVENTORY_CAPACITY = 8;
 const EPSILON = 0.001;
 
 type Vec3 = Readonly<{ x: number; y: number; z: number }>;
@@ -68,7 +71,8 @@ type Hit = {
 type Cell = { column: number; row: number };
 type QueuedAction =
   | { kind: "move"; relativeDirection: number }
-  | { kind: "turn"; amount: -1 | 1 };
+  | { kind: "turn"; amount: -1 | 1 }
+  | { kind: "wait" };
 type ActiveAction =
   | {
       kind: "move";
@@ -92,14 +96,69 @@ type ViewSnap = {
   toYaw: number;
 };
 
-type ImpostorPlacement = Readonly<{
+type ItemId =
+  | "rusty_sword"
+  | "iron_sword"
+  | "ember_blade"
+  | "leather_armor"
+  | "bone_mail"
+  | "healing_potion"
+  | "spirit_tonic";
+
+type ItemDefinition = Readonly<{
+  name: string;
+  kind: "weapon" | "armor" | "consumable";
+  icon: string;
+  attack?: number;
+  defense?: number;
+  healing?: number;
+}>;
+
+type InventoryItem = Readonly<{
+  instanceId: number;
+  definitionId: ItemId;
+}>;
+
+type GroundItem = InventoryItem & Cell;
+
+type EnemyTemplate = Readonly<{
+  name: string;
   source: string;
   column: number;
   row: number;
   height: number;
+  health: number;
+  attack: number;
+  defense: number;
+  sight: number;
+  drop: ItemId;
 }>;
 
-type Impostor = ImpostorPlacement & Readonly<{ image: HTMLImageElement }>;
+type Enemy = Omit<EnemyTemplate, "column" | "row"> & {
+  id: number;
+  column: number;
+  row: number;
+  currentHealth: number;
+  alerted: boolean;
+  alive: boolean;
+  image: HTMLImageElement;
+};
+
+type Player = {
+  column: number;
+  row: number;
+  facing: number;
+  maxHealth: number;
+  health: number;
+  baseAttack: number;
+  baseDefense: number;
+  turns: number;
+  dead: boolean;
+  won: boolean;
+  inventory: InventoryItem[];
+  weaponInstanceId: number | null;
+  armorInstanceId: number | null;
+};
 
 type SceneLight = {
   position: Vec3;
@@ -226,36 +285,6 @@ const columnMaterials = {
   Grey_Floor: { kind: "diffuse", color: v(0.17, 0.16, 0.21) },
 } satisfies Record<string, Material>;
 
-const spiderMaterials = {
-  Material: { kind: "diffuse", color: v(0.075, 0.045, 0.032) },
-  "Material.001": { kind: "emissive", color: v(0.8, 0.012, 0.006), emission: 3.5 },
-} satisfies Record<string, Material>;
-
-const batMaterials = {
-  Belly: { kind: "diffuse", color: v(0.45, 0.24, 0.04) },
-  Black: { kind: "diffuse", color: v(0.012, 0.009, 0.016) },
-  Eyes: { kind: "emissive", color: v(0.65, 0.025, 0.008), emission: 2.5 },
-  Main: { kind: "diffuse", color: v(0.075, 0.025, 0.13) },
-  Nose: { kind: "diffuse", color: v(0.25, 0.045, 0.12) },
-} satisfies Record<string, Material>;
-
-const dragonMaterials = {
-  Belly: { kind: "diffuse", color: v(0.48, 0.27, 0.025) },
-  Claws: { kind: "metal", color: v(0.12, 0.11, 0.12), roughness: 0.32 },
-  Eyes: { kind: "emissive", color: v(0.9, 0.08, 0.008), emission: 3 },
-  Main: { kind: "diffuse", color: v(0.24, 0.025, 0.04) },
-  Wings: { kind: "diffuse", color: v(0.025, 0.018, 0.025) },
-} satisfies Record<string, Material>;
-
-const skeletonMaterials = {
-  Skeleton: { kind: "diffuse", color: v(0.55, 0.43, 0.27) },
-} satisfies Record<string, Material>;
-
-const slimeMaterials = {
-  Body: { kind: "diffuse", color: v(0.18, 0.68, 0.07) },
-  Eyes: { kind: "metal", color: v(0.025, 0.028, 0.032), roughness: 0.18 },
-} satisfies Record<string, Material>;
-
 function baseMesh(source: string, materials: Record<string, Material>, fallback: Material) {
   return createObjMesh(source, {
     translation: v(),
@@ -273,31 +302,88 @@ const spikesMesh = baseMesh(spikesSource, spikeMaterials, spikeMaterials.DarkMet
 const torchMesh = baseMesh(torchSource, fireMaterials, fireMaterials.DarkMetal);
 const woodfireMesh = baseMesh(woodfireSource, fireMaterials, fireMaterials.Wood);
 const columnMesh = baseMesh(columnSource, columnMaterials, columnMaterials.Grey_Floor);
-const spiderMesh = baseMesh(spiderSource, spiderMaterials, spiderMaterials.Material);
-const batMesh = baseMesh(batSource, batMaterials, batMaterials.Main);
-const dragonMesh = baseMesh(dragonSource, dragonMaterials, dragonMaterials.Main);
-const skeletonMesh = baseMesh(skeletonSource, skeletonMaterials, skeletonMaterials.Skeleton);
-const slimeMesh = baseMesh(slimeSource, slimeMaterials, slimeMaterials.Body);
 
-const spiderPlacement = {
-  column: 1,
-  row: 3,
-  scale: 0.26,
-  rotation: Math.PI,
-} as const;
+const ITEM_DEFINITIONS: Readonly<Record<ItemId, ItemDefinition>> = {
+  rusty_sword: {
+    name: "Spada arrugginita", kind: "weapon", icon: rustySwordIconUrl, attack: 2,
+  },
+  iron_sword: {
+    name: "Spada di ferro", kind: "weapon", icon: ironSwordIconUrl, attack: 4,
+  },
+  ember_blade: {
+    name: "Lama di brace", kind: "weapon", icon: emberBladeIconUrl, attack: 6,
+  },
+  leather_armor: {
+    name: "Armatura di cuoio", kind: "armor", icon: leatherArmorIconUrl, defense: 2,
+  },
+  bone_mail: {
+    name: "Corazza d'ossa", kind: "armor", icon: boneMailIconUrl, defense: 4,
+  },
+  healing_potion: {
+    name: "Pozione curativa", kind: "consumable", icon: healingPotionIconUrl, healing: 12,
+  },
+  spirit_tonic: {
+    name: "Tonico spirituale", kind: "consumable", icon: spiritTonicIconUrl, healing: 18,
+  },
+};
 
-const monsterPlacements = [
-  { mesh: batMesh, column: 8, row: 3, offset: v(0, 0.62, 0), scale: 0.24, rotation: -Math.PI / 2 },
-  { mesh: slimeMesh, column: 7, row: 5, offset: v(0, 0.01, 0), scale: 0.32, rotation: -Math.PI / 2 },
-  { mesh: skeletonMesh, column: 7, row: 9, offset: v(0, -0.03, 0), scale: 0.31, rotation: -Math.PI / 2 },
-  { mesh: dragonMesh, column: 12, row: 13, offset: v(0, 0, 0), scale: 0.38, rotation: -Math.PI / 2 },
-] as const;
+const itemIconImages = new Map<ItemId, HTMLImageElement>();
+for (const itemId of Object.keys(ITEM_DEFINITIONS) as ItemId[]) {
+  const image = new Image();
+  image.decoding = "async";
+  image.src = ITEM_DEFINITIONS[itemId].icon;
+  itemIconImages.set(itemId, image);
+}
 
-const impostorPlacements: readonly ImpostorPlacement[] = [
-  { source: impImpostorUrl, column: 2, row: 3, height: 1.25 },
-  { source: ghostImpostorUrl, column: 13, row: 6, height: 1.5 },
-  { source: magmaDemonImpostorUrl, column: 9, row: 5, height: 1.55 },
-  { source: lichImpostorUrl, column: 8, row: 13, height: 1.5 },
+const enemyTemplates: readonly EnemyTemplate[] = [
+  {
+    name: "Imp",
+    source: impImpostorUrl,
+    column: 2,
+    row: 3,
+    height: 1.25,
+    health: 8,
+    attack: 4,
+    defense: 0,
+    sight: 6,
+    drop: "healing_potion",
+  },
+  {
+    name: "Fantasma",
+    source: ghostImpostorUrl,
+    column: 13,
+    row: 6,
+    height: 1.5,
+    health: 12,
+    attack: 5,
+    defense: 1,
+    sight: 7,
+    drop: "spirit_tonic",
+  },
+  {
+    name: "Demone del magma",
+    source: magmaDemonImpostorUrl,
+    column: 9,
+    row: 5,
+    height: 1.55,
+    health: 18,
+    attack: 7,
+    defense: 2,
+    sight: 6,
+    drop: "ember_blade",
+  },
+  {
+    name: "Lich",
+    source: lichImpostorUrl,
+    column: 8,
+    row: 13,
+    height: 1.5,
+    health: 24,
+    attack: 8,
+    defense: 3,
+    sight: 8,
+    drop: "bone_mail",
+  },
 ];
 
 const torchPlacements = [
@@ -357,22 +443,6 @@ function buildDungeon(): MeshInstance[] {
       columnMesh,
       cellPosition(columnCell.column, columnCell.row),
       0.49,
-    ));
-  }
-
-  instances.push(createMeshInstance(
-    spiderMesh,
-    add(cellPosition(spiderPlacement.column, spiderPlacement.row), v(0, 0.01, 0)),
-    spiderPlacement.scale,
-    spiderPlacement.rotation,
-  ));
-
-  for (const monster of monsterPlacements) {
-    instances.push(createMeshInstance(
-      monster.mesh,
-      add(cellPosition(monster.column, monster.row), monster.offset),
-      monster.scale,
-      monster.rotation,
     ));
   }
 
@@ -607,13 +677,24 @@ const sampleLabel = document.querySelector<HTMLElement>("#samples");
 const messageLabel = document.querySelector<HTMLElement>("#message");
 const positionLabel = document.querySelector<HTMLElement>("#position");
 const healthLabel = document.querySelector<HTMLElement>("#health");
+const combatLogElement = document.querySelector<HTMLElement>("#combat-log");
+const inventoryPanelElement = document.querySelector<HTMLElement>("#inventory");
+const inventoryItemsElement = document.querySelector<HTMLElement>("#inventory-items");
+const equipmentElement = document.querySelector<HTMLElement>("#equipment");
 const resolutionButton = document.querySelector<HTMLButtonElement>("#resolution");
 const frameElement = document.querySelector<HTMLElement>(".frame");
 if (!canvasElement) throw new Error("Canvas #app non trovato");
 if (!impostorCanvas) throw new Error("Canvas #impostors non trovato");
 if (!frameElement) throw new Error("Contenitore .frame non trovato");
+if (!combatLogElement || !inventoryPanelElement || !inventoryItemsElement || !equipmentElement) {
+  throw new Error("Interfaccia di combattimento non trovata");
+}
 const viewFrame = frameElement;
 const spriteCanvas = impostorCanvas;
+const combatLog = combatLogElement;
+const inventoryPanel = inventoryPanelElement;
+const inventoryItems = inventoryItemsElement;
+const equipment = equipmentElement;
 let canvas = canvasElement;
 canvas.width = renderSize;
 canvas.height = renderSize;
@@ -627,12 +708,59 @@ if (!impostorContextValue) throw new Error("Contesto impostori 2D non disponibil
 const impostorContext = impostorContextValue;
 impostorContext.imageSmoothingEnabled = true;
 
-const impostors: readonly Impostor[] = impostorPlacements.map((placement) => {
-  const image = new Image();
-  image.decoding = "async";
-  image.src = placement.source;
-  return { ...placement, image };
-});
+function createEnemies(): Enemy[] {
+  return enemyTemplates.map((template, index) => {
+    const image = new Image();
+    image.decoding = "async";
+    image.src = template.source;
+    return {
+      ...template,
+      id: index + 1,
+      currentHealth: template.health,
+      alerted: false,
+      alive: true,
+      image,
+    };
+  });
+}
+
+let nextItemInstanceId = 1;
+
+function createItem(definitionId: ItemId): InventoryItem {
+  return { instanceId: nextItemInstanceId++, definitionId };
+}
+
+function createPlayer(): Player {
+  const weapon = createItem("rusty_sword");
+  const armor = createItem("leather_armor");
+  const potion = createItem("healing_potion");
+  return {
+    column: startCell.column,
+    row: startCell.row,
+    facing: 2,
+    maxHealth: 30,
+    health: 30,
+    baseAttack: 3,
+    baseDefense: 0,
+    turns: 0,
+    dead: false,
+    won: false,
+    inventory: [weapon, armor, potion],
+    weaponInstanceId: weapon.instanceId,
+    armorInstanceId: armor.instanceId,
+  };
+}
+
+function createGroundItems(): GroundItem[] {
+  return [
+    { ...createItem("iron_sword"), column: 5, row: 1 },
+    { ...createItem("healing_potion"), column: 3, row: 9 },
+  ];
+}
+
+let enemies = createEnemies();
+let player = createPlayer();
+let groundItems = createGroundItems();
 
 let image = context.createImageData(renderSize, renderSize);
 let accumulation = new Float32Array(renderSize * renderSize * 3);
@@ -640,16 +768,9 @@ let resolved = new Float32Array(renderSize * renderSize * 3);
 let denoisedA = new Float32Array(renderSize * renderSize * 3);
 let denoisedB = new Float32Array(renderSize * renderSize * 3);
 
-const player = {
-  column: startCell.column,
-  row: startCell.row,
-  facing: 2,
-  health: 100,
-  won: false,
-};
-
 const actionQueue: QueuedAction[] = [];
 const triggeredTraps = new Set<string>();
+const combatMessages: string[] = [];
 let activeAction: ActiveAction | null = null;
 let viewSnap: ViewSnap | null = null;
 let lookPointerId: number | null = null;
@@ -664,6 +785,8 @@ let paused = false;
 let gpuRenderer: WebGpuRenderer | null = null;
 let packedSceneCache: ReturnType<typeof packMeshScene> | null = null;
 let resolutionChanging = false;
+let inventoryOpen = false;
+let gameplayRandomState = 0x51f15e;
 
 function resetAccumulation(): void {
   accumulation.fill(0);
@@ -698,20 +821,22 @@ function projectPoint(
 
 function renderImpostors(): void {
   impostorContext.clearRect(0, 0, renderSize, renderSize);
+  impostorContext.imageSmoothingEnabled = true;
   const basis = cameraBasis();
-  const projected = impostors.flatMap((impostor) => {
-    if (!impostor.image.complete || impostor.image.naturalWidth === 0) return [];
-    const base = add(cellPosition(impostor.column, impostor.row), v(0, 0.015, 0));
-    const center = add(base, v(0, impostor.height * 0.5, 0));
+  const projected = enemies.flatMap((enemy) => {
+    if (!enemy.alive || !enemy.image.complete || enemy.image.naturalWidth === 0) return [];
+    const base = add(cellPosition(enemy.column, enemy.row), v(0, 0.015, 0));
+    const center = add(base, v(0, enemy.height * 0.5, 0));
     const centerOnScreen = projectPoint(center, basis);
-    const topOnScreen = projectPoint(add(base, v(0, impostor.height, 0)), basis);
+    const topOnScreen = projectPoint(add(base, v(0, enemy.height, 0)), basis);
     const bottomOnScreen = projectPoint(base, basis);
     if (!centerOnScreen || !topOnScreen || !bottomOnScreen) return [];
     const height = Math.abs(bottomOnScreen.y - topOnScreen.y);
-    const width = height * (impostor.image.naturalWidth / impostor.image.naturalHeight);
+    const width = height * (enemy.image.naturalWidth / enemy.image.naturalHeight);
     if (height < 0.5 || centerOnScreen.x + width < 0 || centerOnScreen.x - width > renderSize) return [];
     return [{
-      image: impostor.image,
+      enemy,
+      image: enemy.image,
       center,
       depth: centerOnScreen.depth,
       x: centerOnScreen.x - width * 0.5,
@@ -733,6 +858,7 @@ function renderImpostors(): void {
       camera.position.z - impostor.center.z,
     ));
     const planeDistance = dot(sub(impostor.center, camera.position), planeNormal);
+    let visibleColumns = 0;
 
     for (let column = firstColumn; column < lastColumn; column += 1) {
       const ray = cameraRay(column, impostor.centerY - 0.5, basis, true);
@@ -742,6 +868,7 @@ function renderImpostors(): void {
       if (spriteDistance <= EPSILON) continue;
       const blocker = sceneHit(ray, EPSILON, spriteDistance);
       if (blocker && blocker.distance < spriteDistance - 0.025) continue;
+      visibleColumns += 1;
 
       const sourceX = ((column - impostor.x) / impostor.width) * impostor.image.naturalWidth;
       const sourceWidth = impostor.image.naturalWidth / impostor.width;
@@ -757,8 +884,55 @@ function renderImpostors(): void {
         impostor.height,
       );
     }
+
+    if (visibleColumns > 0 && impostor.enemy.currentHealth < impostor.enemy.health) {
+      const barWidth = Math.max(3, impostor.width * 0.72);
+      const barX = impostor.x + (impostor.width - barWidth) * 0.5;
+      const barY = impostor.y - 2;
+      impostorContext.filter = "none";
+      impostorContext.fillStyle = "#170705";
+      impostorContext.fillRect(barX - 0.5, barY - 0.5, barWidth + 1, 2);
+      impostorContext.fillStyle = "#b94332";
+      impostorContext.fillRect(
+        barX,
+        barY,
+        barWidth * (impostor.enemy.currentHealth / impostor.enemy.health),
+        1,
+      );
+    }
   }
   impostorContext.filter = "none";
+  impostorContext.imageSmoothingEnabled = false;
+
+  for (const groundItem of groundItems) {
+    const point = add(cellPosition(groundItem.column, groundItem.row), v(0, 0.12, 0));
+    const onScreen = projectPoint(point, basis);
+    if (!onScreen) continue;
+    const toItem = sub(point, camera.position);
+    const distance = length(toItem);
+    const blocker = sceneHit(
+      { origin: camera.position, direction: mul(toItem, 1 / Math.max(distance, EPSILON)) },
+      EPSILON,
+      distance,
+    );
+    if (blocker && blocker.distance < distance - 0.025) continue;
+    const definition = ITEM_DEFINITIONS[groundItem.definitionId];
+    const icon = itemIconImages.get(groundItem.definitionId);
+    const size = Math.max(3, Math.min(7, Math.round(13 / onScreen.depth)));
+    const x = Math.round(onScreen.x - size * 0.5);
+    const y = Math.round(onScreen.y - size * 0.72);
+
+    if (icon?.complete && icon.naturalWidth > 0) {
+      impostorContext.drawImage(icon, x, y, size, size);
+    } else {
+      impostorContext.fillStyle = definition.kind === "consumable"
+        ? "#b94332"
+        : definition.kind === "weapon" ? "#c9b28c" : "#8c633d";
+      impostorContext.fillRect(x, y, size, size);
+    }
+  }
+
+  impostorContext.imageSmoothingEnabled = true;
 }
 
 function cameraRay(
@@ -898,14 +1072,258 @@ function showMessage(message: string, duration = 1400): void {
   statusUntil = performance.now() + duration;
 }
 
+function gameplayRandom(): number {
+  gameplayRandomState ^= gameplayRandomState << 13;
+  gameplayRandomState ^= gameplayRandomState >>> 17;
+  gameplayRandomState ^= gameplayRandomState << 5;
+  return (gameplayRandomState >>> 0) / 4294967296;
+}
+
+function rollDie(sides: number): number {
+  return 1 + Math.floor(gameplayRandom() * Math.max(1, sides));
+}
+
+function inventoryItem(instanceId: number | null): InventoryItem | null {
+  return player.inventory.find((item) => item.instanceId === instanceId) ?? null;
+}
+
+function playerAttackPower(): number {
+  const weapon = inventoryItem(player.weaponInstanceId);
+  return player.baseAttack + (weapon ? ITEM_DEFINITIONS[weapon.definitionId].attack ?? 0 : 0);
+}
+
+function playerDefensePower(): number {
+  const armor = inventoryItem(player.armorInstanceId);
+  return player.baseDefense + (armor ? ITEM_DEFINITIONS[armor.definitionId].defense ?? 0 : 0);
+}
+
+function addCombatMessage(message: string, duration = 1800): void {
+  combatMessages.push(message);
+  if (combatMessages.length > 4) combatMessages.shift();
+  combatLog.replaceChildren(...combatMessages.map((entry) => {
+    const line = document.createElement("div");
+    line.textContent = entry;
+    return line;
+  }));
+  showMessage(message, duration);
+}
+
+function itemDescription(item: InventoryItem): string {
+  const definition = ITEM_DEFINITIONS[item.definitionId];
+  if (definition.kind === "weapon") return `${definition.name} · ATK +${definition.attack ?? 0}`;
+  if (definition.kind === "armor") return `${definition.name} · DIF +${definition.defense ?? 0}`;
+  return `${definition.name} · cura ${definition.healing ?? 0}`;
+}
+
+function renderInventoryPanel(): void {
+  const weapon = inventoryItem(player.weaponInstanceId);
+  const armor = inventoryItem(player.armorInstanceId);
+  equipment.textContent = [
+    `Arma: ${weapon ? ITEM_DEFINITIONS[weapon.definitionId].name : "nessuna"}`,
+    `Armatura: ${armor ? ITEM_DEFINITIONS[armor.definitionId].name : "nessuna"}`,
+    `ATK ${playerAttackPower()} · DIF ${playerDefensePower()} · ${player.inventory.length}/${INVENTORY_CAPACITY}`,
+  ].join("\n");
+  equipment.style.whiteSpace = "pre-line";
+  inventoryItems.replaceChildren();
+
+  if (player.inventory.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "inventory-help";
+    empty.textContent = "L'inventario è vuoto.";
+    inventoryItems.append(empty);
+    return;
+  }
+
+  player.inventory.forEach((item, index) => {
+    const button = document.createElement("button");
+    const definition = ITEM_DEFINITIONS[item.definitionId];
+    const equipped = item.instanceId === player.weaponInstanceId || item.instanceId === player.armorInstanceId;
+    button.className = "inventory-item";
+    button.type = "button";
+    button.disabled = activeAction !== null || viewSnap !== null || player.dead || player.won;
+
+    const icon = document.createElement("img");
+    icon.className = "inventory-icon";
+    icon.src = definition.icon;
+    icon.alt = "";
+    icon.width = 20;
+    icon.height = 20;
+
+    const label = document.createElement("span");
+    label.textContent = `${index + 1}. ${itemDescription(item)}${equipped ? " · equipaggiato" : ""}`;
+    button.append(icon, label);
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      useInventorySlot(index);
+    });
+    inventoryItems.append(button);
+  });
+}
+
+function setInventoryOpen(open: boolean): void {
+  inventoryOpen = open;
+  inventoryPanel.hidden = !open;
+  if (open) renderInventoryPanel();
+}
+
+function enemyAt(column: number, row: number, excludedId?: number): Enemy | null {
+  return enemies.find((enemy) =>
+    enemy.alive && enemy.id !== excludedId && enemy.column === column && enemy.row === row) ?? null;
+}
+
+function killPlayer(): void {
+  player.dead = true;
+  actionQueue.length = 0;
+  setInventoryOpen(false);
+  showMessage("SEI MORTO · Premi R per ricominciare", Infinity);
+  combatMessages.push("Sei morto nel dungeon.");
+  if (combatMessages.length > 4) combatMessages.shift();
+  combatLog.replaceChildren(...combatMessages.map((entry) => {
+    const line = document.createElement("div");
+    line.textContent = entry;
+    return line;
+  }));
+}
+
+function damagePlayer(amount: number, source: string): void {
+  const damage = Math.max(1, amount);
+  player.health = Math.max(0, player.health - damage);
+  addCombatMessage(`${source} ti colpisce: −${damage}`);
+  if (player.health <= 0) killPlayer();
+}
+
+function attackEnemy(enemy: Enemy): void {
+  const damage = Math.max(1, rollDie(playerAttackPower()) - enemy.defense);
+  enemy.currentHealth = Math.max(0, enemy.currentHealth - damage);
+  enemy.alerted = true;
+  addCombatMessage(`Colpisci ${enemy.name}: −${damage} PV`);
+  if (enemy.currentHealth > 0) return;
+
+  enemy.alive = false;
+  groundItems.push({ ...createItem(enemy.drop), column: enemy.column, row: enemy.row });
+  addCombatMessage(`${enemy.name} muore e lascia ${ITEM_DEFINITIONS[enemy.drop].name}.`, 2400);
+}
+
+function findEnemyPath(enemy: Enemy): { step: Cell; distance: number } | null {
+  const startKey = `${enemy.column},${enemy.row}`;
+  const queue: Array<{ cell: Cell; first: Cell | null; distance: number }> = [{
+    cell: { column: enemy.column, row: enemy.row },
+    first: null,
+    distance: 0,
+  }];
+  const visited = new Set([startKey]);
+  const maximumDistance = enemy.alerted ? LEVEL.length * LEVEL[0].length : enemy.sight;
+
+  for (let index = 0; index < queue.length; index += 1) {
+    const current = queue[index];
+    if (!current || current.distance >= maximumDistance) continue;
+    for (const direction of DIRECTIONS) {
+      const next = {
+        column: current.cell.column + direction.column,
+        row: current.cell.row + direction.row,
+      };
+      const key = `${next.column},${next.row}`;
+      if (visited.has(key)) continue;
+      visited.add(key);
+      const first = current.first ?? next;
+      const distance = current.distance + 1;
+      if (next.column === player.column && next.row === player.row) return { step: first, distance };
+      if (!isWalkable(next.column, next.row) || enemyAt(next.column, next.row, enemy.id)) continue;
+      queue.push({ cell: next, first, distance });
+    }
+  }
+  return null;
+}
+
+function runEnemyTurns(): void {
+  for (const enemy of enemies) {
+    if (!enemy.alive || player.dead || player.won) continue;
+    const distance = Math.abs(enemy.column - player.column) + Math.abs(enemy.row - player.row);
+    if (distance === 1) {
+      const damage = Math.max(1, rollDie(enemy.attack) - playerDefensePower());
+      damagePlayer(damage, enemy.name);
+      continue;
+    }
+
+    const path = findEnemyPath(enemy);
+    if (!path) continue;
+    enemy.alerted = true;
+    if (path.step.column === player.column && path.step.row === player.row) continue;
+    enemy.column = path.step.column;
+    enemy.row = path.step.row;
+  }
+}
+
+function finishPlayerTurn(): void {
+  player.turns += 1;
+  if (!player.dead && !player.won) runEnemyTurns();
+  renderInventoryPanel();
+}
+
+function pickupGroundItems(): void {
+  const remaining: GroundItem[] = [];
+  let inventoryFullReported = false;
+  for (const item of groundItems) {
+    if (item.column !== player.column || item.row !== player.row) {
+      remaining.push(item);
+      continue;
+    }
+    if (player.inventory.length >= INVENTORY_CAPACITY) {
+      remaining.push(item);
+      if (!inventoryFullReported) addCombatMessage("Inventario pieno: non puoi raccogliere altro.");
+      inventoryFullReported = true;
+      continue;
+    }
+    player.inventory.push({ instanceId: item.instanceId, definitionId: item.definitionId });
+    addCombatMessage(`Raccogli ${ITEM_DEFINITIONS[item.definitionId].name}.`);
+  }
+  groundItems = remaining;
+  renderInventoryPanel();
+}
+
+function useInventorySlot(index: number): void {
+  if (activeAction || viewSnap || lookPointerId !== null || player.dead || player.won) return;
+  const item = player.inventory[index];
+  if (!item) return;
+  const definition = ITEM_DEFINITIONS[item.definitionId];
+
+  if (definition.kind === "consumable") {
+    if (player.health >= player.maxHealth) {
+      addCombatMessage("Sei già in piena salute.");
+      return;
+    }
+    const healing = Math.min(definition.healing ?? 0, player.maxHealth - player.health);
+    player.health += healing;
+    player.inventory.splice(index, 1);
+    addCombatMessage(`Usi ${definition.name}: +${healing} PV.`);
+  } else if (definition.kind === "weapon") {
+    if (player.weaponInstanceId === item.instanceId) return;
+    player.weaponInstanceId = item.instanceId;
+    addCombatMessage(`Equipaggi ${definition.name}.`);
+  } else {
+    if (player.armorInstanceId === item.instanceId) return;
+    player.armorInstanceId = item.instanceId;
+    addCombatMessage(`Indossi ${definition.name}.`);
+  }
+
+  setInventoryOpen(false);
+  finishPlayerTurn();
+}
+
 function enqueue(action: QueuedAction): void {
-  if (player.won || actionQueue.length >= 2) return;
+  if (player.dead || player.won || inventoryOpen || actionQueue.length >= 2) return;
   actionQueue.push(action);
 }
 
 function beginNextAction(now: number): void {
   const action = actionQueue.shift();
   if (!action) return;
+
+  if (action.kind === "wait") {
+    addCombatMessage("Aspetti e ascolti il dungeon.");
+    finishPlayerTurn();
+    return;
+  }
 
   if (action.kind === "turn") {
     activeAction = {
@@ -945,6 +1363,12 @@ function beginNextAction(now: number): void {
     fromFov: camera.fov,
     toYaw: snappedTurns * (Math.PI / 2),
   };
+  const targetEnemy = enemyAt(to.column, to.row);
+  if (targetEnemy) {
+    attackEnemy(targetEnemy);
+    finishPlayerTurn();
+    return;
+  }
   activeAction = {
     kind: "move",
     startedAt: now,
@@ -959,10 +1383,11 @@ function enteredCell(): void {
     const key = `${player.column},${player.row}`;
     if (!triggeredTraps.has(key)) {
       triggeredTraps.add(key);
-      player.health = Math.max(0, player.health - 25);
-      showMessage("CLANG! Gli spuntoni ti feriscono: −25", 2200);
+      damagePlayer(5, "Gli spuntoni");
     }
   }
+  if (player.dead) return;
+  pickupGroundItems();
   if (symbol === "G") {
     player.won = true;
     actionQueue.length = 0;
@@ -1005,25 +1430,30 @@ function updateGame(now: number): void {
   markCameraChanged();
 
   if (linearProgress < 1) return;
-  if (activeAction.kind === "move") {
-    player.column = activeAction.to.column;
-    player.row = activeAction.to.row;
+  const completedAction = activeAction;
+  if (completedAction.kind === "move") {
+    player.column = completedAction.to.column;
+    player.row = completedAction.to.row;
     camera.position = cellPosition(player.column, player.row, EYE_HEIGHT);
     enteredCell();
   } else {
-    player.facing = activeAction.targetFacing;
-    camera.yaw = activeAction.toYaw;
+    player.facing = completedAction.targetFacing;
+    camera.yaw = completedAction.toYaw;
   }
   activeAction = null;
+  if (completedAction.kind === "move") finishPlayerTurn();
 }
 
 function updateHud(now: number): void {
   const direction = DIRECTIONS[player.facing]?.name ?? "?";
-  if (positionLabel) positionLabel.textContent = `${direction} · ${player.column},${player.row}`;
-  if (healthLabel) healthLabel.textContent = `VITA ${player.health}`;
+  if (positionLabel) positionLabel.textContent = `${direction} · ${player.column},${player.row} · T${player.turns}`;
+  if (healthLabel) {
+    healthLabel.textContent = `PV ${player.health}/${player.maxHealth} · ATK ${playerAttackPower()} · DIF ${playerDefensePower()}`;
+  }
   if (messageLabel) {
     messageLabel.textContent = statusUntil >= now
       ? statusMessage
+      : player.dead ? "SEI MORTO · R per ricominciare"
       : player.won ? "TESORO TROVATO" : "Trova il baule";
     messageLabel.classList.toggle("won", player.won);
   }
@@ -1143,20 +1573,25 @@ async function cycleResolution(): Promise<void> {
 }
 
 function restart(): void {
-  player.column = startCell.column;
-  player.row = startCell.row;
-  player.facing = 2;
-  player.health = 100;
-  player.won = false;
+  nextItemInstanceId = 1;
+  player = createPlayer();
+  groundItems = createGroundItems();
+  enemies = createEnemies();
+  gameplayRandomState = 0x51f15e;
   triggeredTraps.clear();
+  combatMessages.length = 0;
+  combatLog.replaceChildren();
   actionQueue.length = 0;
   activeAction = null;
   viewSnap = null;
+  paused = false;
+  setInventoryOpen(false);
   camera.position = cellPosition(startCell.column, startCell.row, EYE_HEIGHT);
   camera.yaw = Math.PI;
   camera.pitch = 0;
   camera.fov = DEFAULT_FOV;
-  showMessage("Trova il baule oltre il labirinto", 2200);
+  addCombatMessage("Entri nel dungeon. Ogni passo può essere l'ultimo.", 2200);
+  renderInventoryPanel();
   markCameraChanged();
 }
 
@@ -1173,7 +1608,7 @@ window.addEventListener("resize", fitCanvas);
 resolutionButton?.addEventListener("click", () => void cycleResolution());
 
 viewFrame.addEventListener("pointerdown", (event) => {
-  if (event.button !== 0 || lookPointerId !== null || activeAction?.kind === "turn") return;
+  if (inventoryOpen || event.button !== 0 || lookPointerId !== null || activeAction?.kind === "turn") return;
   event.preventDefault();
   lookPointerId = event.pointerId;
   lastLookX = event.clientX;
@@ -1211,6 +1646,7 @@ viewFrame.addEventListener("pointercancel", finishMouseLook);
 viewFrame.addEventListener("lostpointercapture", finishMouseLook);
 viewFrame.addEventListener("wheel", (event) => {
   event.preventDefault();
+  if (inventoryOpen) return;
   viewSnap = null;
   camera.fov = Math.max(
     MIN_FOV,
@@ -1222,10 +1658,29 @@ viewFrame.addEventListener("wheel", (event) => {
 window.addEventListener("keydown", (event) => {
   const handled = [
     "KeyW", "KeyS", "KeyA", "KeyD", "KeyQ", "KeyE",
-    "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "KeyR", "Space",
+    "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "KeyR", "KeyI",
+    "KeyP", "Space", "Period", "Escape",
+    "Digit1", "Digit2", "Digit3", "Digit4", "Digit5", "Digit6", "Digit7", "Digit8",
   ].includes(event.code);
   if (handled) event.preventDefault();
   if (event.repeat) return;
+
+  if (event.code === "KeyR") {
+    restart();
+    return;
+  }
+
+  const digitMatch = /^Digit([1-8])$/.exec(event.code);
+  if (inventoryOpen) {
+    if (event.code === "KeyI" || event.code === "Escape") setInventoryOpen(false);
+    if (digitMatch) useInventorySlot(Number(digitMatch[1]) - 1);
+    return;
+  }
+
+  if (event.code === "KeyI") {
+    setInventoryOpen(true);
+    return;
+  }
 
   if (event.code === "KeyW" || event.code === "ArrowUp") enqueue({ kind: "move", relativeDirection: 0 });
   if (event.code === "KeyS" || event.code === "ArrowDown") enqueue({ kind: "move", relativeDirection: 2 });
@@ -1233,12 +1688,15 @@ window.addEventListener("keydown", (event) => {
   if (event.code === "KeyE") enqueue({ kind: "move", relativeDirection: 1 });
   if (event.code === "KeyA" || event.code === "ArrowLeft") enqueue({ kind: "turn", amount: -1 });
   if (event.code === "KeyD" || event.code === "ArrowRight") enqueue({ kind: "turn", amount: 1 });
-  if (event.code === "KeyR") restart();
-  if (event.code === "Space") paused = !paused;
+  if (event.code === "Space" || event.code === "Period") enqueue({ kind: "wait" });
+  if (event.code === "KeyP") paused = !paused;
 });
 
+inventoryPanel.addEventListener("pointerdown", (event) => event.stopPropagation());
 fitCanvas();
 updateResolutionButton();
 updateHud(performance.now());
+addCombatMessage("Entri nel dungeon. Ogni passo può essere l'ultimo.", 2200);
+renderInventoryPanel();
 requestAnimationFrame(frame);
 void initializeWebGpu();
