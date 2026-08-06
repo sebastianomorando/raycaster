@@ -28,7 +28,8 @@ le barre sopra gli impostori mostrano i danni subiti.
 L'inventario contiene fino a otto oggetti e gestisce armi, armature e consumabili.
 Gli oggetti a terra usano le stesse icone pixel art dell'inventario e vengono raccolti
 automaticamente attraversandone la cella. Equipaggiare o usare un oggetto consuma
-un turno, in stile roguelike.
+un turno, in stile roguelike. Il pannello mostra una griglia di sole icone; hover e
+focus visualizzano nome, statistiche e descrizione dell'oggetto.
 
 Falò e torce hanno geometria emissiva e luci campionate per importanza. La luce
 diretta viene valutata a ogni rimbalzo diffuso, producendo illuminazione globale,
@@ -68,8 +69,15 @@ bun run build
 - `game/camera.ts`: base della camera, proiezione e generazione dei raggi primari.
 - `game/cpu-path-tracer.ts`: fallback CPU progressivo, denoise e tone mapping.
 - `game/impostor-renderer.ts`: nemici billboard, barre vita e oggetti a terra.
+- `game/ui.ts`: HUD DOM, messaggi, inventario e tooltip accessibili.
+- `game/input.ts`: mouse-look, zoom, tastiera e traduzione degli input in azioni.
 - `game/math.ts`: tipi e operazioni vettoriali condivise.
+- `ui.css`: skin pixel dell'HUD e dei pannelli.
 - `mesh.ts` e `renderer-webgpu.ts`: accelerazione geometrica e backend WebGPU.
+
+La scena e gli impostori sono renderizzati su canvas; HUD e inventario restano nel
+DOM perché testo, tooltip, focus e controlli da tastiera richiederebbero molto più
+codice e duplicazione se ricostruiti manualmente su un canvas UI.
 
 Controlli: `W/S` avanti e indietro, `A/D` rotazione di 90°, `Q/E` strafing,
 frecce come alternativa, trascinamento con il pulsante del mouse premuto per guardarsi

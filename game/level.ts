@@ -32,7 +32,7 @@ export const DIRECTIONS = [
   { column: 0, row: -1, name: "N" },
   { column: 1, row: 0, name: "E" },
   { column: 0, row: 1, name: "S" },
-  { column: -1, row: 0, name: "O" },
+  { column: -1, row: 0, name: "W" },
 ] as const;
 
 export function findCell(symbol: string): Cell {
@@ -40,7 +40,7 @@ export function findCell(symbol: string): Cell {
     const column = LEVEL[row]?.indexOf(symbol) ?? -1;
     if (column >= 0) return { column, row };
   }
-  throw new Error(`Cella ${symbol} non trovata`);
+  throw new Error(`Cell ${symbol} was not found`);
 }
 
 export function findCells(symbol: string): Cell[] {

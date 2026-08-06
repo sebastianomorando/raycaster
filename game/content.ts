@@ -22,6 +22,7 @@ export type ItemId =
 
 export type ItemDefinition = Readonly<{
   name: string;
+  description: string;
   kind: "weapon" | "armor" | "consumable";
   icon: string;
   attack?: number;
@@ -78,25 +79,32 @@ export type Player = {
 /** Catalogo centrale: statistiche, nomi e rappresentazione grafica degli oggetti. */
 export const ITEM_DEFINITIONS: Readonly<Record<ItemId, ItemDefinition>> = {
   rusty_sword: {
-    name: "Spada arrugginita", kind: "weapon", icon: rustySwordIconUrl, attack: 2,
+    name: "Rusty sword", description: "An old blade, still sharp enough to draw blood.",
+    kind: "weapon", icon: rustySwordIconUrl, attack: 2,
   },
   iron_sword: {
-    name: "Spada di ferro", kind: "weapon", icon: ironSwordIconUrl, attack: 4,
+    name: "Iron sword", description: "Solid, heavy, and dependable.",
+    kind: "weapon", icon: ironSwordIconUrl, attack: 4,
   },
   ember_blade: {
-    name: "Lama di brace", kind: "weapon", icon: emberBladeIconUrl, attack: 6,
+    name: "Ember blade", description: "Its edge burns with a flame that never fades.",
+    kind: "weapon", icon: emberBladeIconUrl, attack: 6,
   },
   leather_armor: {
-    name: "Armatura di cuoio", kind: "armor", icon: leatherArmorIconUrl, defense: 2,
+    name: "Leather armor", description: "Light protection, scarred by a long journey.",
+    kind: "armor", icon: leatherArmorIconUrl, defense: 2,
   },
   bone_mail: {
-    name: "Corazza d'ossa", kind: "armor", icon: boneMailIconUrl, defense: 4,
+    name: "Bone mail", description: "Ancient bones held together by dark magic.",
+    kind: "armor", icon: boneMailIconUrl, defense: 4,
   },
   healing_potion: {
-    name: "Pozione curativa", kind: "consumable", icon: healingPotionIconUrl, healing: 12,
+    name: "Healing potion", description: "Mends wounds that have not cut too deep.",
+    kind: "consumable", icon: healingPotionIconUrl, healing: 12,
   },
   spirit_tonic: {
-    name: "Tonico spirituale", kind: "consumable", icon: spiritTonicIconUrl, healing: 18,
+    name: "Spirit tonic", description: "A cold draught that restores body and spirit.",
+    kind: "consumable", icon: spiritTonicIconUrl, healing: 18,
   },
 };
 
@@ -115,11 +123,11 @@ export const ENEMY_TEMPLATES: readonly EnemyTemplate[] = [
     health: 8, attack: 4, defense: 0, sight: 6, drop: "healing_potion",
   },
   {
-    name: "Fantasma", source: ghostImpostorUrl, column: 13, row: 6, height: 1.5,
+    name: "Ghost", source: ghostImpostorUrl, column: 13, row: 6, height: 1.5,
     health: 12, attack: 5, defense: 1, sight: 7, drop: "spirit_tonic",
   },
   {
-    name: "Demone del magma", source: magmaDemonImpostorUrl, column: 9, row: 5, height: 1.55,
+    name: "Magma demon", source: magmaDemonImpostorUrl, column: 9, row: 5, height: 1.55,
     health: 18, attack: 7, defense: 2, sight: 6, drop: "ember_blade",
   },
   {

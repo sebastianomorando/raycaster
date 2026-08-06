@@ -1,266 +1,18 @@
 <!doctype html>
-<html lang="it">
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#080604" />
     <title>Dungeon 64</title>
-    <style>
-      :root {
-        color-scheme: dark;
-        font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
-        background: #070504;
-        color: #d6c5a5;
-      }
-
-      * { box-sizing: border-box; }
-
-      html,
-      body {
-        width: 100%;
-        min-height: 100%;
-        margin: 0;
-        overflow: hidden;
-      }
-
-      body {
-        display: grid;
-        place-content: center;
-        background:
-          radial-gradient(circle at 50% 38%, #28170d 0, #0b0705 43%, #030201 100%);
-      }
-
-      main { display: grid; gap: 10px; }
-
-      .titlebar,
-      .statusbar {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        gap: 20px;
-        padding: 0 2px;
-        color: #806a4d;
-        font-size: 10px;
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
-      }
-
-      .titlebar strong {
-        color: #d99b45;
-        font-size: 12px;
-        letter-spacing: 0.16em;
-      }
-
-      .title-actions {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-      }
-
-      #resolution {
-        min-width: 58px;
-        padding: 3px 6px;
-        border: 1px solid #67462b;
-        border-radius: 0;
-        background: #160e09;
-        color: #d99b45;
-        font: inherit;
-        letter-spacing: 0.06em;
-        text-transform: uppercase;
-        cursor: pointer;
-      }
-
-      #resolution:hover,
-      #resolution:focus-visible {
-        border-color: #b67a3a;
-        background: #28170d;
-        outline: none;
-      }
-
-      #resolution:disabled {
-        color: #594936;
-        cursor: wait;
-      }
-
-      .frame {
-        position: relative;
-        border: 1px solid #67462b;
-        background: #000;
-        box-shadow: 0 22px 90px #000, 0 0 0 4px #160e09;
-        cursor: grab;
-        touch-action: none;
-      }
-
-      .frame.looking { cursor: grabbing; }
-
-      canvas {
-        display: block;
-        width: 64px;
-        height: 64px;
-        image-rendering: pixelated;
-        image-rendering: crisp-edges;
-      }
-
-      #impostors {
-        position: absolute;
-        inset: 0;
-        pointer-events: none;
-      }
-
-      .crosshair {
-        position: absolute;
-        inset: 50% auto auto 50%;
-        width: 5px;
-        height: 5px;
-        translate: -50% -50%;
-        opacity: 0.5;
-        pointer-events: none;
-      }
-
-      .crosshair::before,
-      .crosshair::after {
-        position: absolute;
-        content: "";
-        background: #f5d79b;
-      }
-
-      .crosshair::before { top: 2px; left: 0; width: 5px; height: 1px; }
-      .crosshair::after { top: 0; left: 2px; width: 1px; height: 5px; }
-
-      #message {
-        position: absolute;
-        left: 50%;
-        bottom: 5%;
-        translate: -50% 0;
-        width: max-content;
-        max-width: 88%;
-        padding: 3px 5px;
-        background: #090603c7;
-        color: #d6c5a5;
-        font-size: 9px;
-        text-align: center;
-        text-transform: uppercase;
-        pointer-events: none;
-      }
-
-      #message.won { color: #ffc35b; }
-      #health { color: #b85b46; }
-      #samples { color: #a97839; }
-
-      #combat-log {
-        position: absolute;
-        top: 4%;
-        left: 4%;
-        max-width: 72%;
-        color: #c89a61;
-        font-size: 8px;
-        line-height: 1.45;
-        text-shadow: 1px 1px #000;
-        pointer-events: none;
-      }
-
-      #combat-log div:last-child { color: #f0c77d; }
-
-      #inventory {
-        position: absolute;
-        inset: 7%;
-        z-index: 3;
-        overflow: auto;
-        padding: 10px;
-        border: 1px solid #8f6337;
-        background: #080503ed;
-        box-shadow: 0 8px 30px #000;
-        cursor: default;
-      }
-
-      #inventory[hidden] { display: none; }
-
-      #inventory h2 {
-        margin: 0 0 7px;
-        color: #d99b45;
-        font-size: 11px;
-        letter-spacing: 0.12em;
-        text-transform: uppercase;
-      }
-
-      #equipment {
-        margin-bottom: 8px;
-        color: #9d825d;
-        font-size: 8px;
-        line-height: 1.5;
-        text-transform: uppercase;
-      }
-
-      #inventory-items {
-        display: grid;
-        gap: 3px;
-      }
-
-      .inventory-item {
-        display: grid;
-        grid-template-columns: 20px minmax(0, 1fr);
-        align-items: center;
-        gap: 6px;
-        width: 100%;
-        padding: 4px 5px;
-        border: 1px solid #4d3825;
-        background: #130c08;
-        color: #c9b28c;
-        font: inherit;
-        font-size: 8px;
-        text-align: left;
-        cursor: pointer;
-      }
-
-      .inventory-icon {
-        display: block;
-        width: 20px;
-        height: 20px;
-        object-fit: cover;
-        image-rendering: crisp-edges;
-        image-rendering: pixelated;
-      }
-
-      .inventory-item:hover,
-      .inventory-item:focus-visible {
-        border-color: #a9763c;
-        color: #f0c77d;
-        outline: none;
-      }
-
-      .inventory-item:disabled { cursor: wait; opacity: 0.55; }
-
-      .inventory-help {
-        margin: 8px 0 0;
-        color: #695640;
-        font-size: 7px;
-        line-height: 1.5;
-        text-transform: uppercase;
-      }
-
-      .help {
-        position: fixed;
-        right: 12px;
-        bottom: 10px;
-        max-width: calc(100vw - 24px);
-        color: #594936;
-        font-size: 9px;
-        line-height: 1.5;
-        text-align: right;
-        text-transform: uppercase;
-      }
-
-      @media (max-height: 620px) {
-        .help { display: none; }
-      }
-    </style>
+    <link rel="stylesheet" href="./ui.css" />
   </head>
   <body>
     <main>
       <div class="titlebar">
         <strong>Dungeon 64</strong>
         <div class="title-actions">
-          <button id="resolution" type="button" title="Cambia risoluzione interna">64×64</button>
+          <button id="resolution" type="button" title="Change internal resolution">64×64</button>
           <span><span id="position">S · 1,1</span> · GI ×5</span>
         </div>
       </div>
@@ -269,21 +21,29 @@
         <canvas id="impostors" width="64" height="64" aria-hidden="true"></canvas>
         <div class="crosshair" aria-hidden="true"></div>
         <div id="combat-log" aria-live="polite"></div>
-        <div id="message">Trova il baule</div>
-        <aside id="inventory" aria-label="Inventario" hidden>
-          <h2>Inventario</h2>
-          <div id="equipment"></div>
-          <div id="inventory-items"></div>
-          <p class="inventory-help">1–8 usa o equipaggia · I/Esc chiude · ogni uso consuma un turno</p>
+        <div id="message">Find the treasure</div>
+        <aside id="inventory" aria-label="Inventory" hidden>
+          <div class="inventory-header">
+            <h2>Inventory</h2>
+            <span id="inventory-capacity">0/8</span>
+          </div>
+          <div id="inventory-stats"></div>
+          <div id="inventory-items" role="list"></div>
+          <div id="inventory-tooltip" role="status" hidden>
+            <div id="inventory-tooltip-name"></div>
+            <div id="inventory-tooltip-stats"></div>
+            <div id="inventory-tooltip-description"></div>
+          </div>
+          <p class="inventory-help">Hover or focus an icon · 1–8 use · I/Esc close</p>
         </aside>
       </div>
       <div class="statusbar">
-        <span id="health">Vita 100</span>
+        <span id="health">HP 100</span>
         <span id="samples">0 spp</span>
       </div>
     </main>
     <div class="help">
-      W/S muovi · A/D gira · Q/E strafing · Spazio attendi · I inventario · P pausa · R ricomincia
+      W/S move · A/D turn · Q/E strafe · Space wait · I inventory · P pause · R restart
     </div>
     <script type="module" src="./index.ts"></script>
   </body>

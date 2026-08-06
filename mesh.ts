@@ -242,7 +242,7 @@ export function createObjMesh(source: string, options: ObjOptions): TriangleMesh
     }
   }
 
-  if (triangles.length === 0) throw new Error("L'OBJ non contiene triangoli validi");
+  if (triangles.length === 0) throw new Error("The OBJ contains no valid triangles");
   return {
     triangles,
     root: buildBvh(triangles, triangles.map((_, index) => index)),
@@ -366,7 +366,7 @@ function buildSceneBvh(instances: MeshInstance[], indices: number[]): SceneBvhNo
 }
 
 export function createMeshScene(instances: MeshInstance[]): MeshScene {
-  if (instances.length === 0) throw new Error("La scena mesh non contiene istanze");
+  if (instances.length === 0) throw new Error("The mesh scene contains no instances");
   return {
     instances,
     root: buildSceneBvh(instances, instances.map((_, index) => index)),
