@@ -1,7 +1,7 @@
 import { cameraBasis, cameraRay, projectPoint, type Camera } from "./camera.ts";
 import {
   ITEM_DEFINITIONS,
-  itemIconImages,
+  groundItemIconImages,
   type Enemy,
   type GroundItem,
 } from "./content.ts";
@@ -138,11 +138,11 @@ export function renderImpostors({
     if (blocker && blocker.distance < distance - 0.025) continue;
 
     const definition = ITEM_DEFINITIONS[groundItem.definitionId];
-    const icon = itemIconImages.get(groundItem.definitionId);
+    const icon = groundItemIconImages.get(groundItem.definitionId);
     const size = Math.max(3, Math.min(7, Math.round(13 / onScreen.depth)));
     const x = Math.round(onScreen.x - size * 0.5);
     const y = Math.round(onScreen.y - size * 0.72);
-    if (icon?.complete && icon.naturalWidth > 0) {
+    if (icon) {
       context.drawImage(icon, x, y, size, size);
     } else {
       context.fillStyle = definition.kind === "consumable"

@@ -606,8 +606,7 @@ function restart(): void {
 }
 
 function fitCanvas(): void {
-  const available = Math.max(64, Math.min(window.innerWidth - 28, window.innerHeight - 150));
-  const displaySize = Math.max(1, Math.floor(available / renderSize)) * renderSize;
+  const displaySize = ui.frameDisplaySize(renderSize);
   canvas.style.width = `${displaySize}px`;
   canvas.style.height = `${displaySize}px`;
   spriteCanvas.style.width = `${displaySize}px`;

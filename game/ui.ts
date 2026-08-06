@@ -45,6 +45,8 @@ export class GameUi {
   readonly resolutionButton = requiredElement<HTMLButtonElement>("#resolution");
   readonly inventoryPanel = requiredElement<HTMLElement>("#inventory");
 
+  private readonly titlebar = requiredElement<HTMLElement>(".titlebar");
+  private readonly statusbar = requiredElement<HTMLElement>(".statusbar");
   private readonly sampleLabel = requiredElement<HTMLElement>("#samples");
   private readonly messageLabel = requiredElement<HTMLElement>("#message");
   private readonly positionLabel = requiredElement<HTMLElement>("#position");
@@ -102,6 +104,26 @@ export class GameUi {
 
   setResolutionBusy(busy: boolean): void {
     this.resolutionButton.disabled = busy;
+  }
+
+  /**
+   * Calcola il lato visualizzato più grande che entra nella finestra e resta un
+   * multiplo della risoluzione interna, così ogni texel conserva pixel interi.
+   */
+  frameDisplaySize(renderSize: number): number {
+    const main = this.frame.parentElement;
+    const mainStyle = main ? getComputedStyle(main) : null;
+    const rowGap = Number.parseFloat(mainStyle?.rowGap ?? "0") || 0;
+    const shortSide = Math.min(window.innerWidth, window.innerHeight);
+    const viewportMargin = Math.max(12, shortSide * 0.025);
+    const availableWidth = window.innerWidth - viewportMargin * 2;
+    const availableHeight = window.innerHeight
+      - this.titlebar.offsetHeight
+      - this.statusbar.offsetHeight
+      - rowGap * 2
+      - viewportMargin * 2;
+    const available = Math.max(renderSize, Math.min(availableWidth, availableHeight));
+    return Math.max(1, Math.floor(available / renderSize)) * renderSize;
   }
 
   setInventoryOpen(open: boolean): void {

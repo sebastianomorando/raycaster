@@ -108,13 +108,46 @@ export const ITEM_DEFINITIONS: Readonly<Record<ItemId, ItemDefinition>> = {
   },
 };
 
-/** Immagini precaricate e condivise dal renderer degli oggetti a terra. */
-export const itemIconImages = new Map<ItemId, HTMLImageElement>();
+/**
+ * Versioni trasparenti delle icone usate esclusivamente per gli oggetti a terra.
+ *
+ * Le immagini originali includono una vignetta scura utile nell'inventario, ma
+ * troppo evidente quando vengono disegnate come piccoli sprite nella scena. La
+ * maschera conserva pixel luminosi o molto saturi e rende trasparente lo sfondo.
+ */
+export const groundItemIconImages = new Map<ItemId, HTMLCanvasElement>();
+
+function createGroundItemIcon(image: HTMLImageElement): HTMLCanvasElement {
+  const canvas = document.createElement("canvas");
+  canvas.width = image.naturalWidth;
+  canvas.height = image.naturalHeight;
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  if (!context) return canvas;
+
+  context.drawImage(image, 0, 0);
+  const pixels = context.getImageData(0, 0, canvas.width, canvas.height);
+  for (let index = 0; index < pixels.data.length; index += 4) {
+    const red = pixels.data[index] ?? 0;
+    const green = pixels.data[index + 1] ?? 0;
+    const blue = pixels.data[index + 2] ?? 0;
+    const brightest = Math.max(red, green, blue);
+    const chroma = brightest - Math.min(red, green, blue);
+    const foreground = Math.max(brightest, chroma * 1.35);
+    const normalized = Math.max(0, Math.min(1, (foreground - 42) / 82));
+    const smoothAlpha = normalized * normalized * (3 - 2 * normalized);
+    pixels.data[index + 3] = Math.round((pixels.data[index + 3] ?? 0) * smoothAlpha);
+  }
+  context.putImageData(pixels, 0, 0);
+  return canvas;
+}
+
 for (const itemId of Object.keys(ITEM_DEFINITIONS) as ItemId[]) {
   const image = new Image();
   image.decoding = "async";
+  image.addEventListener("load", () => {
+    groundItemIconImages.set(itemId, createGroundItemIcon(image));
+  });
   image.src = ITEM_DEFINITIONS[itemId].icon;
-  itemIconImages.set(itemId, image);
 }
 
 export const ENEMY_TEMPLATES: readonly EnemyTemplate[] = [

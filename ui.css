@@ -17,6 +17,35 @@
   --panel-raised: #170e08;
   --edge-dark: #2d1a0e;
   --edge: #80562e;
+  /* Token responsive: vmin segue il lato limitante, i clamp evitano estremi. */
+  --ui-1: clamp(0.78px, 0.13vmin, 1.55px);
+  --ui-2: clamp(1.56px, 0.26vmin, 3.1px);
+  --ui-3: clamp(2.34px, 0.39vmin, 4.65px);
+  --ui-4: clamp(3.12px, 0.52vmin, 6.2px);
+  --ui-5: clamp(3.9px, 0.65vmin, 7.75px);
+  --ui-6: clamp(4.68px, 0.78vmin, 9.3px);
+  --ui-7: clamp(5.46px, 0.91vmin, 10.85px);
+  --ui-8: clamp(6.24px, 1.04vmin, 12.4px);
+  --ui-9: clamp(7.02px, 1.17vmin, 13.95px);
+  --ui-10: clamp(7.8px, 1.3vmin, 15.5px);
+  --ui-11: clamp(8.58px, 1.43vmin, 17.05px);
+  --ui-12: clamp(9.36px, 1.56vmin, 18.6px);
+  --ui-14: clamp(10.92px, 1.82vmin, 21.7px);
+  --ui-15: clamp(11.7px, 1.95vmin, 23.25px);
+  --ui-16: clamp(12.48px, 2.08vmin, 24.8px);
+  --ui-18: clamp(14.04px, 2.34vmin, 27.9px);
+  --ui-20: clamp(15.6px, 2.6vmin, 31px);
+  --ui-22: clamp(17.16px, 2.86vmin, 34.1px);
+  --ui-24: clamp(18.72px, 3.12vmin, 37.2px);
+  --ui-28: clamp(21.84px, 3.64vmin, 43.4px);
+  --ui-32: clamp(24.96px, 4.16vmin, 49.6px);
+  --ui-44: clamp(34.32px, 5.72vmin, 68.2px);
+  --ui-56: clamp(43.68px, 7.28vmin, 86.8px);
+  --ui-64: clamp(49.92px, 8.32vmin, 99.2px);
+  --ui-70: clamp(54.6px, 9.1vmin, 108.5px);
+  --ui-86: clamp(67.08px, 11.18vmin, 133.3px);
+  --ui-90: clamp(70.2px, 11.7vmin, 139.5px);
+  --ui-121: clamp(94.38px, 15.73vmin, 187.55px);
   background: #070504;
   color: var(--ink);
   font-family: var(--pixel-font);
@@ -43,44 +72,46 @@ body {
 }
 
 button { font-family: inherit; }
-main { display: grid; gap: 10px; }
+main { display: grid; gap: var(--ui-10); }
 
 .titlebar,
 .statusbar {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 20px;
-  padding: 0 2px;
+  gap: var(--ui-20);
+  padding: 0 var(--ui-2);
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--ui-12);
   letter-spacing: 0.07em;
   line-height: 1;
   text-transform: uppercase;
-  text-shadow: 1px 1px #000;
+  text-shadow: var(--ui-1) var(--ui-1) #000;
 }
 
 .titlebar strong {
   color: var(--gold);
-  font-size: 15px;
+  font-size: var(--ui-15);
   letter-spacing: 0.14em;
 }
 
 .title-actions {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--ui-10);
 }
 
 #resolution {
-  min-width: 64px;
-  padding: 5px 7px 4px;
+  min-width: var(--ui-64);
+  padding: var(--ui-5) var(--ui-7) var(--ui-4);
   border: 2px solid var(--edge);
   border-radius: 0;
   background: #160e09;
-  box-shadow: inset -2px -2px #080503, inset 2px 2px #3b2514;
+  box-shadow:
+    inset calc(0px - var(--ui-2)) calc(0px - var(--ui-2)) #080503,
+    inset var(--ui-2) var(--ui-2) #3b2514;
   color: var(--gold);
-  font-size: 11px;
+  font-size: var(--ui-11);
   font-weight: 400;
   letter-spacing: 0.05em;
   text-transform: uppercase;
@@ -101,7 +132,9 @@ main { display: grid; gap: 10px; }
   position: relative;
   border: 2px solid #67462b;
   background: #000;
-  box-shadow: 0 22px 90px #000, 0 0 0 4px #160e09;
+  box-shadow:
+    0 var(--ui-22) var(--ui-90) #000,
+    0 0 0 var(--ui-4) #160e09;
   cursor: grab;
   touch-action: none;
 }
@@ -125,8 +158,8 @@ canvas {
 .crosshair {
   position: absolute;
   inset: 50% auto auto 50%;
-  width: 5px;
-  height: 5px;
+  width: var(--ui-5);
+  height: var(--ui-5);
   translate: -50% -50%;
   opacity: 0.55;
   pointer-events: none;
@@ -139,8 +172,19 @@ canvas {
   background: #f5d79b;
 }
 
-.crosshair::before { top: 2px; left: 0; width: 5px; height: 1px; }
-.crosshair::after { top: 0; left: 2px; width: 1px; height: 5px; }
+.crosshair::before {
+  top: var(--ui-2);
+  left: 0;
+  width: var(--ui-5);
+  height: max(1px, var(--ui-1));
+}
+
+.crosshair::after {
+  top: 0;
+  left: var(--ui-2);
+  width: max(1px, var(--ui-1));
+  height: var(--ui-5);
+}
 
 #message {
   position: absolute;
@@ -149,14 +193,14 @@ canvas {
   translate: -50% 0;
   width: max-content;
   max-width: 88%;
-  padding: 5px 7px 4px;
+  padding: var(--ui-5) var(--ui-7) var(--ui-4);
   border: 1px solid #4b321d;
   background: #090603dc;
   color: var(--ink);
-  font-size: 12px;
+  font-size: var(--ui-12);
   line-height: 1;
   text-align: center;
-  text-shadow: 2px 2px #000;
+  text-shadow: var(--ui-2) var(--ui-2) #000;
   text-transform: uppercase;
   pointer-events: none;
 }
@@ -171,9 +215,9 @@ canvas {
   left: 4%;
   max-width: 76%;
   color: #d4a56b;
-  font-size: 11px;
+  font-size: var(--ui-11);
   line-height: 1.35;
-  text-shadow: 2px 2px #000;
+  text-shadow: var(--ui-2) var(--ui-2) #000;
   pointer-events: none;
 }
 
@@ -186,15 +230,19 @@ canvas {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  padding: 14px;
+  padding: var(--ui-14);
   border: 3px solid #9a6835;
   background:
     linear-gradient(#0c0805ed, #060403f5),
-    repeating-linear-gradient(0deg, #ffffff05 0 2px, transparent 2px 4px);
+    repeating-linear-gradient(
+      0deg,
+      #ffffff05 0 var(--ui-2),
+      transparent var(--ui-2) var(--ui-4)
+    );
   box-shadow:
-    inset 0 0 0 2px #2d1a0e,
-    inset 0 0 28px #000,
-    0 10px 32px #000;
+    inset 0 0 0 var(--ui-2) #2d1a0e,
+    inset 0 0 var(--ui-28) #000,
+    0 var(--ui-10) var(--ui-32) #000;
   cursor: default;
 }
 
@@ -204,30 +252,30 @@ canvas {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  gap: 12px;
-  padding-bottom: 8px;
+  gap: var(--ui-12);
+  padding-bottom: var(--ui-8);
   border-bottom: 2px solid #56391f;
 }
 
 #inventory h2 {
   margin: 0;
   color: var(--gold);
-  font-size: 18px;
+  font-size: var(--ui-18);
   letter-spacing: 0.13em;
   line-height: 1;
-  text-shadow: 2px 2px #3a1609;
+  text-shadow: var(--ui-2) var(--ui-2) #3a1609;
   text-transform: uppercase;
 }
 
 #inventory-capacity {
   color: #c8a974;
-  font-size: 12px;
+  font-size: var(--ui-12);
 }
 
 #inventory-stats {
-  padding: 8px 0 10px;
+  padding: var(--ui-8) 0 var(--ui-10);
   color: #b89869;
-  font-size: 12px;
+  font-size: var(--ui-12);
   letter-spacing: 0.05em;
   line-height: 1;
   text-transform: uppercase;
@@ -235,31 +283,33 @@ canvas {
 
 #inventory-items {
   display: grid;
-  grid-template-columns: repeat(4, 56px);
-  grid-auto-rows: 56px;
+  grid-template-columns: repeat(4, var(--ui-56));
+  grid-auto-rows: var(--ui-56);
   justify-content: center;
-  gap: 9px;
-  min-height: 121px;
+  gap: var(--ui-9);
+  min-height: var(--ui-121);
 }
 
 .inventory-item {
   position: relative;
   display: grid;
   place-items: center;
-  width: 56px;
-  height: 56px;
-  padding: 4px;
+  width: var(--ui-56);
+  height: var(--ui-56);
+  padding: var(--ui-4);
   border: 2px solid #51371f;
   border-radius: 0;
   background: #120b07;
-  box-shadow: inset -3px -3px #050302, inset 3px 3px #2d1c10;
+  box-shadow:
+    inset calc(0px - var(--ui-3)) calc(0px - var(--ui-3)) #050302,
+    inset var(--ui-3) var(--ui-3) #2d1c10;
   cursor: pointer;
 }
 
 .inventory-icon {
   display: block;
-  width: 44px;
-  height: 44px;
+  width: var(--ui-44);
+  height: var(--ui-44);
   object-fit: cover;
   image-rendering: crisp-edges;
   image-rendering: pixelated;
@@ -269,14 +319,14 @@ canvas {
   position: absolute;
   top: -2px;
   left: -2px;
-  min-width: 15px;
-  height: 15px;
-  padding: 1px 2px 0;
+  min-width: var(--ui-15);
+  height: var(--ui-15);
+  padding: var(--ui-1) var(--ui-2) 0;
   border: 1px solid #76502b;
   background: #090503;
   color: #d5b77f;
-  font-size: 10px;
-  line-height: 12px;
+  font-size: var(--ui-10);
+  line-height: var(--ui-12);
   text-align: center;
 }
 
@@ -284,14 +334,19 @@ canvas {
 .inventory-item:focus-visible {
   border-color: #e0a54f;
   background: #24150b;
-  box-shadow: inset -3px -3px #080402, inset 3px 3px #533018, 0 0 0 2px #39200f;
+  box-shadow:
+    inset calc(0px - var(--ui-3)) calc(0px - var(--ui-3)) #080402,
+    inset var(--ui-3) var(--ui-3) #533018,
+    0 0 0 var(--ui-2) #39200f;
   outline: none;
-  translate: 0 -1px;
+  translate: 0 calc(0px - var(--ui-1));
 }
 
 .inventory-item.is-equipped {
   border-color: #b87d38;
-  box-shadow: inset 0 0 0 2px #4f3218, inset -3px -3px #050302;
+  box-shadow:
+    inset 0 0 0 var(--ui-2) #4f3218,
+    inset calc(0px - var(--ui-3)) calc(0px - var(--ui-3)) #050302;
 }
 
 .inventory-item.is-equipped::after {
@@ -299,13 +354,13 @@ canvas {
   right: -2px;
   bottom: -2px;
   content: "E";
-  width: 16px;
-  height: 16px;
+  width: var(--ui-16);
+  height: var(--ui-16);
   border: 1px solid #d79b45;
   background: #341c0b;
   color: #ffd67e;
-  font-size: 10px;
-  line-height: 14px;
+  font-size: var(--ui-10);
+  line-height: var(--ui-14);
   text-align: center;
 }
 
@@ -315,47 +370,47 @@ canvas {
   grid-column: 1 / -1;
   place-self: center;
   color: #67523b;
-  font-size: 14px;
+  font-size: var(--ui-14);
   letter-spacing: 0.16em;
 }
 
 #inventory-tooltip {
-  min-height: 86px;
-  margin-top: 12px;
-  padding: 9px 10px;
+  min-height: var(--ui-86);
+  margin-top: var(--ui-12);
+  padding: var(--ui-9) var(--ui-10);
   border: 2px solid #50351d;
   background: #100a06;
-  box-shadow: inset 0 0 0 1px #24160c;
+  box-shadow: inset 0 0 0 max(1px, var(--ui-1)) #24160c;
 }
 
 #inventory-tooltip[hidden] { visibility: hidden; display: block; }
 
 #inventory-tooltip-name {
   color: #f0bd66;
-  font-size: 14px;
+  font-size: var(--ui-14);
   letter-spacing: 0.05em;
   text-transform: uppercase;
 }
 
 #inventory-tooltip-stats {
-  margin-top: 5px;
+  margin-top: var(--ui-5);
   color: #b98a51;
-  font-size: 11px;
+  font-size: var(--ui-11);
   text-transform: uppercase;
 }
 
 #inventory-tooltip-description {
-  margin-top: 6px;
+  margin-top: var(--ui-6);
   color: #bca783;
-  font-size: 11px;
+  font-size: var(--ui-11);
   line-height: 1.3;
 }
 
 .inventory-help {
   margin: auto 0 0;
-  padding-top: 8px;
+  padding-top: var(--ui-8);
   color: #745e43;
-  font-size: 10px;
+  font-size: var(--ui-10);
   line-height: 1.35;
   text-align: center;
   text-transform: uppercase;
@@ -363,19 +418,19 @@ canvas {
 
 .help {
   position: fixed;
-  right: 12px;
-  bottom: 10px;
-  max-width: calc(100vw - 24px);
+  right: var(--ui-12);
+  bottom: var(--ui-10);
+  max-width: calc(100vw - var(--ui-24));
   color: #695740;
-  font-size: 10px;
+  font-size: var(--ui-10);
   line-height: 1.5;
   text-align: right;
-  text-shadow: 1px 1px #000;
+  text-shadow: var(--ui-1) var(--ui-1) #000;
   text-transform: uppercase;
 }
 
 @media (max-height: 620px) {
   .help { display: none; }
-  #inventory { inset: 3%; padding: 10px; }
-  #inventory-tooltip { min-height: 70px; }
+  #inventory { inset: 3%; padding: var(--ui-10); }
+  #inventory-tooltip { min-height: var(--ui-70); }
 }
