@@ -15,6 +15,7 @@ export type ImpostorFrame = Readonly<{
   context: CanvasRenderingContext2D;
   renderSize: number;
   camera: Camera;
+  now: number;
   enemies: readonly Enemy[];
   groundItems: readonly GroundItem[];
 }>;
@@ -29,6 +30,7 @@ export function renderImpostors({
   context,
   renderSize,
   camera,
+  now,
   enemies,
   groundItems,
 }: ImpostorFrame): void {
@@ -60,10 +62,14 @@ export function renderImpostors({
   }).sort((left, right) => right.depth - left.depth);
 
   for (const impostor of projected) {
+    const hitFeedback = now < impostor.enemy.hitFlashUntil;
+    const shake = hitFeedback ? (Math.floor(now / 42) % 2 === 0 ? -0.45 : 0.45) : 0;
+    const spriteX = impostor.x + shake;
+    context.globalAlpha = hitFeedback ? 0.42 : 1;
     const brightness = Math.max(0.42, Math.min(0.88, 0.96 - impostor.depth * 0.035));
     context.filter = `brightness(${brightness}) saturate(0.88)`;
-    const firstColumn = Math.max(0, Math.floor(impostor.x));
-    const lastColumn = Math.min(renderSize, Math.ceil(impostor.x + impostor.width));
+    const firstColumn = Math.max(0, Math.floor(spriteX));
+    const lastColumn = Math.min(renderSize, Math.ceil(spriteX + impostor.width));
     const planeNormal = normalize(v(
       camera.position.x - impostor.center.x,
       0,
@@ -90,7 +96,7 @@ export function renderImpostors({
       if (blocker && blocker.distance < spriteDistance - 0.025) continue;
       visibleColumns += 1;
 
-      const sourceX = ((column - impostor.x) / impostor.width) * impostor.image.naturalWidth;
+      const sourceX = ((column - spriteX) / impostor.width) * impostor.image.naturalWidth;
       const sourceWidth = impostor.image.naturalWidth / impostor.width;
       context.drawImage(
         impostor.image,
@@ -105,6 +111,7 @@ export function renderImpostors({
       );
     }
 
+    context.globalAlpha = 1;
     if (visibleColumns > 0 && impostor.enemy.currentHealth < impostor.enemy.health) {
       const barWidth = Math.max(3, impostor.width * 0.72);
       const barX = impostor.x + (impostor.width - barWidth) * 0.5;
@@ -123,6 +130,7 @@ export function renderImpostors({
   }
 
   context.filter = "none";
+  context.globalAlpha = 1;
   context.imageSmoothingEnabled = false;
   for (const groundItem of groundItems) {
     const point = add(cellPosition(groundItem.column, groundItem.row), v(0, 0.12, 0));

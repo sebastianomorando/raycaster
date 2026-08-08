@@ -19,11 +19,22 @@ distanza, mantenuti frontali alla camera e verificati per colonne contro la geom
 così muri e oggetti possono occultarli. La scena include esempi con imp, fantasma,
 demone del magma e lich.
 
-Il combattimento è a turni: uno spostamento valido, un attacco, l'attesa o l'uso di
-un oggetto consumano un turno, quindi i nemici percepiscono il giocatore, cercano un
+Il combattimento è a turni e usa tiri in stile D&D: ogni attacco lancia un d20 più
+il bonus per superare la classe armatura, poi applica formule come `2 + 1d4` per il
+danno. Uno spostamento valido, un attacco, l'attesa o l'uso di un oggetto consumano
+un turno, quindi i nemici percepiscono il giocatore, cercano un
 percorso sulla griglia e si muovono o attaccano. Entrare nella cella di un nemico
-esegue un attacco corpo a corpo. I nemici hanno vita, attacco, difesa e drop propri;
-le barre sopra gli impostori mostrano i danni subiti.
+esegue un attacco corpo a corpo. I nemici hanno vita, attacco, classe armatura e drop propri;
+le barre sopra gli impostori mostrano i danni subiti, accompagnati da numeri
+fluttuanti e da un breve feedback di trasparenza e movimento.
+
+Il puntatore usa un raycast dalla camera per riconoscere mostri, drop, torce, pareti
+e baule rispettando l'occlusione della scena. Un click su un nemico adiacente attacca,
+mentre oggetti e contenuto del baule possono essere raccolti direttamente. Le torce
+si possono staccare e fissare a un'altra parete: geometria, BVH e luci vengono
+ricostruite anche nel backend WebGPU. Il baule non conclude la partita e resta
+ispezionabile dopo essere stato svuotato. Il Ghost considera le torce una minaccia:
+se entra nel loro raggio usa il proprio turno per allontanarsi dalla luce.
 
 L'inventario contiene fino a otto oggetti e gestisce armi, armature e consumabili.
 Gli oggetti a terra usano le stesse icone pixel art dell'inventario e vengono raccolti
@@ -64,8 +75,11 @@ bun run build
 
 - `index.ts`: stato della partita, turni, input, HUD e orchestrazione dei renderer.
 - `game/content.ts`: definizioni e factory di nemici, giocatore, oggetti e drop.
+- `game/combat.ts`: tiri d20 contro la classe armatura e formule dei dadi di danno.
 - `game/level.ts`: mappa logica e conversione tra griglia e spazio 3D.
-- `game/dungeon.ts`: materiali, mesh, luci e scena statica del dungeon.
+- `game/dungeon.ts`: materiali, mesh, luci e ricostruzione della scena dinamica.
+- `game/interactions.ts`: raycast contestuale per mostri, oggetti, torce, pareti e baule.
+- `game/enemy-ai.ts`: reazioni ambientali dei nemici, inclusa la fuga del Ghost dalla luce.
 - `game/camera.ts`: base della camera, proiezione e generazione dei raggi primari.
 - `game/cpu-path-tracer.ts`: fallback CPU progressivo, denoise e tone mapping.
 - `game/impostor-renderer.ts`: nemici billboard, barre vita e oggetti a terra.
@@ -80,7 +94,8 @@ DOM perché testo, tooltip, focus e controlli da tastiera richiederebbero molto 
 codice e duplicazione se ricostruiti manualmente su un canvas UI.
 
 Controlli: `W/S` avanti e indietro, `A/D` rotazione di 90°, `Q/E` strafing,
-frecce come alternativa, trascinamento con il pulsante del mouse premuto per guardarsi
+frecce come alternativa, click per l'azione indicata dal cursore contestuale,
+trascinamento con il pulsante del mouse premuto per guardarsi
 liberamente intorno e rotellina per lo zoom. La visuale e lo zoom rimangono impostati
 finché non ci si sposta, quindi tornano all'orientamento cardinale più vicino e allo
 zoom normale. `Spazio` o `.` attendono un turno, `I` apre l'inventario, i tasti
@@ -88,6 +103,12 @@ zoom normale. `Spazio` o `.` attendono un turno, `I` apre l'inventario, i tasti
 e `R` fa ricominciare. Il pulsante
 nella barra superiore cambia ciclicamente la risoluzione interna tra 32×32, 64×64,
 128×128 e 256×256, mantenendo sempre l'output pixel-perfect.
+
+## Direzione futura
+
+- Illuminazione come sistema stealth: distanza di percezione dei mostri ridotta al buio.
+- Rune, tracce e passaggi segreti rivelati soltanto orientando una luce nel punto giusto.
+- Creature con reazioni differenti alla luce: fuga, aggressività o vulnerabilità.
 
 This project was created using `bun init` in bun v1.3.14. [Bun](https://bun.com) is a fast all-in-one JavaScript runtime.
 

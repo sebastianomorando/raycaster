@@ -20,6 +20,7 @@
         <canvas id="app" width="64" height="64" aria-label="Dungeon crawler ray traced"></canvas>
         <canvas id="impostors" width="64" height="64" aria-hidden="true"></canvas>
         <div class="crosshair" aria-hidden="true"></div>
+        <div id="interaction-hint" hidden></div>
         <div id="combat-log" aria-live="polite"></div>
         <div id="message">Find the treasure</div>
         <aside id="inventory" aria-label="Inventory" hidden>
@@ -43,7 +44,7 @@
       </div>
     </main>
     <div class="help">
-      W/S move · A/D turn · Q/E strafe · Space wait · I inventory · P pause · R restart
+      Drag look · Click interact · Wheel zoom · W/S move · A/D turn · Q/E strafe · I inventory
     </div>
     <script type="module" src="./index.ts"></script>
   </body>

@@ -4,7 +4,7 @@
  * Qui rimangono lo stato della partita, le regole a turni, il loop principale e
  * il collegamento con il DOM. Dati, scena 3D e renderer vivono nei moduli `game/`.
  */
-import { cameraBasis, type Camera } from "./game/camera.ts";
+import { cameraBasis, projectPoint, type Camera } from "./game/camera.ts";
 import {
   GameEntityFactory,
   ITEM_DEFINITIONS,
@@ -13,10 +13,21 @@ import {
   type GroundItem,
   type InventoryItem,
 } from "./game/content.ts";
+import { resolveAttack, type DamageRoll } from "./game/combat.ts";
 import { CpuPathTracer } from "./game/cpu-path-tracer.ts";
-import { dungeonScene, staticLights, type SceneLight } from "./game/dungeon.ts";
+import { ghostFleeStep } from "./game/enemy-ai.ts";
+import {
+  attachTorch,
+  detachTorch,
+  dungeonScene,
+  resetDungeonState,
+  staticLights,
+  torches,
+  type SceneLight,
+} from "./game/dungeon.ts";
 import { renderImpostors as drawImpostors } from "./game/impostor-renderer.ts";
 import { GameInputController, type InputAction } from "./game/input.ts";
+import { resolveInteraction, type InteractionTarget } from "./game/interactions.ts";
 import {
   DIRECTIONS,
   LEVEL,
@@ -110,6 +121,10 @@ const entityFactory = new GameEntityFactory();
 let enemies = createEnemies();
 let player = entityFactory.createPlayer();
 let groundItems = entityFactory.createGroundItems();
+let chestLoot: InventoryItem[] = [
+  entityFactory.createItem("bone_mail"),
+  entityFactory.createItem("spirit_tonic"),
+];
 const cpuRenderer = new CpuPathTracer(context, renderSize, staticLights);
 
 // Stato transitorio della partita e del loop.
@@ -126,6 +141,9 @@ let resolutionChanging = false;
 let inventoryOpen = false;
 let gameplayRandomState = 0x51f15e;
 let inputController: GameInputController;
+let carriedTorches = 0;
+let pointerPosition: { clientX: number; clientY: number } | null = null;
+let interactionTarget: InteractionTarget | null = null;
 
 function markCameraChanged(): void {
   cameraDirty = true;
@@ -142,22 +160,27 @@ function gameplayRandom(): number {
   return (gameplayRandomState >>> 0) / 4294967296;
 }
 
-function rollDie(sides: number): number {
-  return 1 + Math.floor(gameplayRandom() * Math.max(1, sides));
-}
-
 function inventoryItem(instanceId: number | null): InventoryItem | null {
   return player.inventory.find((item) => item.instanceId === instanceId) ?? null;
 }
 
-function playerAttackPower(): number {
+function playerAttackBonus(): number {
   const weapon = inventoryItem(player.weaponInstanceId);
-  return player.baseAttack + (weapon ? ITEM_DEFINITIONS[weapon.definitionId].attack ?? 0 : 0);
+  return player.baseAttackBonus +
+    (weapon ? ITEM_DEFINITIONS[weapon.definitionId].attackBonus ?? 0 : 0);
 }
 
-function playerDefensePower(): number {
+function playerArmorClass(): number {
   const armor = inventoryItem(player.armorInstanceId);
-  return player.baseDefense + (armor ? ITEM_DEFINITIONS[armor.definitionId].defense ?? 0 : 0);
+  return player.baseArmorClass +
+    (armor ? ITEM_DEFINITIONS[armor.definitionId].armorClassBonus ?? 0 : 0);
+}
+
+function playerDamageRoll(): DamageRoll {
+  const weapon = inventoryItem(player.weaponInstanceId);
+  return weapon
+    ? ITEM_DEFINITIONS[weapon.definitionId].damage ?? { bonus: 0, dice: 1, sides: 2 }
+    : { bonus: 0, dice: 1, sides: 2 };
 }
 
 function addCombatMessage(message: string, duration = 1800): void {
@@ -169,8 +192,9 @@ function addCombatMessage(message: string, duration = 1800): void {
 function renderInventoryPanel(): void {
   ui.renderInventory({
     player,
-    attack: playerAttackPower(),
-    defense: playerDefensePower(),
+    attackBonus: playerAttackBonus(),
+    armorClass: playerArmorClass(),
+    torches: carriedTorches,
     disabled: activeAction !== null || viewSnap !== null || player.dead || player.won,
     onUse: useInventorySlot,
   });
@@ -179,6 +203,7 @@ function renderInventoryPanel(): void {
 function setInventoryOpen(open: boolean): void {
   inventoryOpen = open;
   ui.setInventoryOpen(open);
+  if (open) ui.setInteraction(null);
   if (open) renderInventoryPanel();
 }
 
@@ -195,18 +220,53 @@ function killPlayer(): void {
   ui.addCombatMessage("You died in the dungeon.");
 }
 
-function damagePlayer(amount: number, source: string): void {
+function damagePlayer(amount: number, source: string, attackDetail?: string): void {
   const damage = Math.max(1, amount);
   player.health = Math.max(0, player.health - damage);
-  addCombatMessage(`${source} hits you: −${damage}`);
+  addCombatMessage(`${source} hits you${attackDetail ? ` (${attackDetail})` : ""}: −${damage}`);
   if (player.health <= 0) killPlayer();
 }
 
+function showEnemyCombatPopup(enemy: Enemy, text: string, kind: "damage" | "miss"): void {
+  const projected = projectPoint(
+    cellPosition(enemy.column, enemy.row, Math.max(0.58, enemy.height * 0.72)),
+    camera,
+    cameraBasis(camera),
+    renderSize,
+  );
+  ui.showCombatPopup(
+    text,
+    projected ? projected.x / renderSize : 0.5,
+    projected ? projected.y / renderSize : 0.38,
+    kind,
+  );
+}
+
 function attackEnemy(enemy: Enemy): void {
-  const damage = Math.max(1, rollDie(playerAttackPower()) - enemy.defense);
-  enemy.currentHealth = Math.max(0, enemy.currentHealth - damage);
+  const attack = resolveAttack(
+    gameplayRandom,
+    playerAttackBonus(),
+    enemy.armorClass,
+    playerDamageRoll(),
+  );
   enemy.alerted = true;
-  addCombatMessage(`You hit ${enemy.name}: −${damage} HP`);
+  const now = performance.now();
+  if (!attack.hit) {
+    showEnemyCombatPopup(enemy, "MISS", "miss");
+    addCombatMessage(
+      `You miss ${enemy.name}: d20 ${attack.naturalRoll} + ${playerAttackBonus()} = ${attack.total} vs AC ${enemy.armorClass}.`,
+    );
+    return;
+  }
+
+  enemy.currentHealth = Math.max(0, enemy.currentHealth - attack.damage);
+  enemy.hitFlashUntil = now + 520;
+  showEnemyCombatPopup(enemy, `−${attack.damage}`, "damage");
+  addCombatMessage(
+    `You hit ${enemy.name}: ${attack.total} vs AC ${enemy.armorClass}, −${attack.damage} HP${
+      attack.critical ? " · CRITICAL" : ""
+    }`,
+  );
   if (enemy.currentHealth > 0) return;
 
   enemy.alive = false;
@@ -249,10 +309,34 @@ function findEnemyPath(enemy: Enemy): { step: Cell; distance: number } | null {
 function runEnemyTurns(): void {
   for (const enemy of enemies) {
     if (!enemy.alive || player.dead || player.won) continue;
+    const fleeStep = ghostFleeStep(enemy, player, enemies, torches);
+    if (fleeStep) {
+      enemy.column = fleeStep.column;
+      enemy.row = fleeStep.row;
+      enemy.alerted = false;
+      ui.addCombatMessage("The Ghost recoils from the torchlight.");
+      continue;
+    }
     const distance = Math.abs(enemy.column - player.column) + Math.abs(enemy.row - player.row);
     if (distance === 1) {
-      const damage = Math.max(1, rollDie(enemy.attack) - playerDefensePower());
-      damagePlayer(damage, enemy.name);
+      const attack = resolveAttack(
+        gameplayRandom,
+        enemy.attackBonus,
+        playerArmorClass(),
+        enemy.damage,
+      );
+      if (!attack.hit) {
+        addCombatMessage(
+          `${enemy.name} misses: d20 ${attack.naturalRoll} + ${enemy.attackBonus} = ${attack.total} vs AC ${playerArmorClass()}.`,
+        );
+        continue;
+      }
+      damagePlayer(
+        attack.damage,
+        enemy.name,
+        `${attack.total} vs AC ${playerArmorClass()}`,
+      );
+      if (attack.critical) ui.addCombatMessage(`${enemy.name} scores a critical hit!`);
       continue;
     }
 
@@ -291,6 +375,124 @@ function pickupGroundItems(): void {
   }
   groundItems = remaining;
   renderInventoryPanel();
+}
+
+function interactionAt(clientX: number, clientY: number): InteractionTarget | null {
+  return resolveInteraction({
+    camera,
+    canvas,
+    renderSize,
+    clientX,
+    clientY,
+    enemies,
+    groundItems,
+    carriedTorches,
+    chestLootRemaining: chestLoot.length,
+  });
+}
+
+/** Invalida sia l'accumulo CPU sia i buffer GPU dopo una modifica al dungeon. */
+function dungeonGeometryChanged(): void {
+  packedSceneCache = null;
+  interactionTarget = null;
+  markCameraChanged();
+  if (gpuRenderer) void initializeWebGpu(renderSize);
+}
+
+function updateInteractionTarget(): void {
+  if (
+    !pointerPosition || inventoryOpen || inputController.isLooking || activeAction || viewSnap ||
+    paused || player.dead || player.won || resolutionChanging
+  ) {
+    interactionTarget = null;
+    ui.setInteraction(null);
+    return;
+  }
+  interactionTarget = interactionAt(pointerPosition.clientX, pointerPosition.clientY);
+  ui.setInteraction(
+    interactionTarget?.kind ?? null,
+    interactionTarget?.label,
+    pointerPosition.clientX,
+    pointerPosition.clientY,
+  );
+}
+
+function pickupPointedItem(instanceId: number): boolean {
+  const index = groundItems.findIndex((item) => item.instanceId === instanceId);
+  const item = groundItems[index];
+  if (!item) return false;
+  if (player.inventory.length >= INVENTORY_CAPACITY) {
+    addCombatMessage("Inventory full: you cannot carry anything else.");
+    return false;
+  }
+  groundItems.splice(index, 1);
+  player.inventory.push({ instanceId: item.instanceId, definitionId: item.definitionId });
+  addCombatMessage(`You pick up ${ITEM_DEFINITIONS[item.definitionId].name}.`);
+  return true;
+}
+
+function lootChest(): boolean {
+  if (chestLoot.length === 0) {
+    showMessage("The chest is empty.");
+    return false;
+  }
+  const freeSlots = INVENTORY_CAPACITY - player.inventory.length;
+  if (freeSlots <= 0) {
+    addCombatMessage("Inventory full: the treasure remains in the chest.");
+    return false;
+  }
+  const looted = chestLoot.splice(0, freeSlots);
+  player.inventory.push(...looted);
+  const names = looted.map((item) => ITEM_DEFINITIONS[item.definitionId].name).join(" and ");
+  addCombatMessage(`You loot the chest: ${names}.`, 2600);
+  if (chestLoot.length > 0) ui.addCombatMessage("There is still treasure inside.");
+  return true;
+}
+
+/** Esegue l'azione contestuale risolta dallo stesso raggio usato per il cursore. */
+function interactAt(clientX: number, clientY: number): void {
+  if (
+    inventoryOpen || activeAction || viewSnap || paused || player.dead || player.won ||
+    resolutionChanging
+  ) return;
+  const target = interactionAt(clientX, clientY);
+  if (!target) return;
+
+  let consumedTurn = false;
+  if (target.kind === "attack" && target.enemyId !== undefined) {
+    const enemy = enemies.find((candidate) => candidate.id === target.enemyId && candidate.alive);
+    if (enemy) {
+      attackEnemy(enemy);
+      consumedTurn = true;
+    }
+  } else if (target.kind === "pickup" && target.itemInstanceId !== undefined) {
+    consumedTurn = pickupPointedItem(target.itemInstanceId);
+  } else if (target.kind === "take-torch" && target.torchId !== undefined) {
+    if (detachTorch(target.torchId)) {
+      carriedTorches += 1;
+      addCombatMessage("You take the torch. Darkness fills the empty corner.");
+      dungeonGeometryChanged();
+      consumedTurn = true;
+    }
+  } else if (target.kind === "place-torch" && target.point && target.normal) {
+    const torch = carriedTorches > 0 ? attachTorch(target.point, target.normal) : null;
+    if (torch) {
+      carriedTorches -= 1;
+      addCombatMessage("You fix the torch to the wall. Shadows retreat.");
+      dungeonGeometryChanged();
+      consumedTurn = true;
+    } else {
+      showMessage("The torch will not hold there.");
+    }
+  } else if (target.kind === "loot") {
+    consumedTurn = lootChest();
+  } else if (target.kind === "inspect") {
+    showMessage(target.label);
+  }
+
+  if (consumedTurn) finishPlayerTurn();
+  renderInventoryPanel();
+  updateInteractionTarget();
 }
 
 function useInventorySlot(index: number): void {
@@ -401,10 +603,8 @@ function enteredCell(): void {
   }
   if (player.dead) return;
   pickupGroundItems();
-  if (symbol === "G") {
-    player.won = true;
-    actionQueue.length = 0;
-    showMessage("TREASURE FOUND · YOU WIN!", Infinity);
+  if (symbol === "G" && chestLoot.length > 0) {
+    showMessage("TREASURE CHEST · CLICK IT TO LOOT", 2600);
   }
 }
 
@@ -463,8 +663,10 @@ function updateHud(now: number): void {
   ui.renderHud(now, {
     player,
     direction,
-    attack: playerAttackPower(),
-    defense: playerDefensePower(),
+    attackBonus: playerAttackBonus(),
+    armorClass: playerArmorClass(),
+    torches: carriedTorches,
+    objective: chestLoot.length > 0 ? "Find and loot the treasure" : "Explore the dungeon",
   });
 }
 
@@ -473,6 +675,7 @@ function frame(now: number): void {
   renderTimeSeconds = now / 1000;
   updateGame(now);
   updateHud(now);
+  updateInteractionTarget();
   playerLight.position = add(camera.position, v(0, 0.14, 0));
 
   if (resolutionChanging) {
@@ -513,7 +716,7 @@ function frame(now: number): void {
   } else {
     ui.setSamples(`${samples} spp · paused`);
   }
-  drawImpostors({ context: impostorContext, renderSize, camera, enemies, groundItems });
+  drawImpostors({ context: impostorContext, renderSize, camera, now, enemies, groundItems });
   requestAnimationFrame(frame);
 }
 
@@ -587,7 +790,13 @@ function restart(): void {
   entityFactory.reset();
   player = entityFactory.createPlayer();
   groundItems = entityFactory.createGroundItems();
+  chestLoot = [
+    entityFactory.createItem("bone_mail"),
+    entityFactory.createItem("spirit_tonic"),
+  ];
   enemies = createEnemies();
+  carriedTorches = 0;
+  resetDungeonState();
   gameplayRandomState = 0x51f15e;
   triggeredTraps.clear();
   ui.clearCombatLog();
@@ -596,13 +805,14 @@ function restart(): void {
   viewSnap = null;
   paused = false;
   setInventoryOpen(false);
+  ui.setInteraction(null);
   camera.position = cellPosition(startCell.column, startCell.row, EYE_HEIGHT);
   camera.yaw = Math.PI;
   camera.pitch = 0;
   camera.fov = DEFAULT_FOV;
   addCombatMessage("You enter the dungeon. Every step could be your last.", 2200);
   renderInventoryPanel();
-  markCameraChanged();
+  dungeonGeometryChanged();
 }
 
 function fitCanvas(): void {
@@ -627,6 +837,16 @@ inputController = new GameInputController({
   canStartLook: () => activeAction?.kind !== "turn",
   onLookStart: () => { viewSnap = null; },
   onCameraChanged: markCameraChanged,
+  onPointerPosition: (clientX, clientY) => {
+    pointerPosition = { clientX, clientY };
+    updateInteractionTarget();
+  },
+  onPointerLeave: () => {
+    pointerPosition = null;
+    interactionTarget = null;
+    ui.setInteraction(null);
+  },
+  onInteract: interactAt,
   onAction: enqueue,
   onInventory: setInventoryOpen,
   onInventorySlot: useInventorySlot,

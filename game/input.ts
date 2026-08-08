@@ -19,6 +19,9 @@ export type InputBindings = Readonly<{
   canStartLook(): boolean;
   onLookStart(): void;
   onCameraChanged(): void;
+  onPointerPosition(clientX: number, clientY: number): void;
+  onPointerLeave(): void;
+  onInteract(clientX: number, clientY: number): void;
   onAction(action: InputAction): void;
   onInventory(open: boolean): void;
   onInventorySlot(index: number): void;
@@ -40,10 +43,12 @@ export class GameInputController {
   private pointerId: number | null = null;
   private lastX = 0;
   private lastY = 0;
+  private dragDistance = 0;
 
   constructor(private readonly bindings: InputBindings) {
     bindings.frame.addEventListener("pointerdown", this.pointerDown);
     bindings.frame.addEventListener("pointermove", this.pointerMove);
+    bindings.frame.addEventListener("pointerleave", this.pointerLeave);
     bindings.frame.addEventListener("pointerup", this.finishMouseLook);
     bindings.frame.addEventListener("pointercancel", this.finishMouseLook);
     bindings.frame.addEventListener("lostpointercapture", this.finishMouseLook);
@@ -70,16 +75,22 @@ export class GameInputController {
     this.pointerId = event.pointerId;
     this.lastX = event.clientX;
     this.lastY = event.clientY;
+    this.dragDistance = 0;
     bindings.onLookStart();
     bindings.frame.classList.add("looking");
     bindings.frame.setPointerCapture(event.pointerId);
   };
 
   private readonly pointerMove = (event: PointerEvent): void => {
+    if (this.pointerId === null) {
+      this.bindings.onPointerPosition(event.clientX, event.clientY);
+      return;
+    }
     if (event.pointerId !== this.pointerId) return;
     const { bindings } = this;
     const movementX = event.clientX - this.lastX;
     const movementY = event.clientY - this.lastY;
+    this.dragDistance += Math.hypot(movementX, movementY);
     this.lastX = event.clientX;
     this.lastY = event.clientY;
     bindings.camera.yaw += movementX * bindings.lookSensitivity;
@@ -95,11 +106,17 @@ export class GameInputController {
 
   private readonly finishMouseLook = (event: PointerEvent): void => {
     if (event.pointerId !== this.pointerId) return;
+    const isClick = event.type === "pointerup" && this.dragDistance <= 4;
     this.pointerId = null;
     this.bindings.frame.classList.remove("looking");
     if (this.bindings.frame.hasPointerCapture(event.pointerId)) {
       this.bindings.frame.releasePointerCapture(event.pointerId);
     }
+    if (isClick) this.bindings.onInteract(event.clientX, event.clientY);
+  };
+
+  private readonly pointerLeave = (): void => {
+    if (this.pointerId === null) this.bindings.onPointerLeave();
   };
 
   private readonly wheel = (event: WheelEvent): void => {

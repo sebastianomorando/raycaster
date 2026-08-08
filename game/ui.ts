@@ -1,12 +1,15 @@
 import { ITEM_DEFINITIONS, type InventoryItem, type Player } from "./content.ts";
+import { formatDamageRoll } from "./combat.ts";
+import type { InteractionKind } from "./interactions.ts";
 
 const INVENTORY_CAPACITY = 8;
 const MAX_COMBAT_MESSAGES = 4;
 
 export type InventoryView = Readonly<{
   player: Player;
-  attack: number;
-  defense: number;
+  attackBonus: number;
+  armorClass: number;
+  torches: number;
   disabled: boolean;
   onUse(index: number): void;
 }>;
@@ -14,8 +17,10 @@ export type InventoryView = Readonly<{
 export type HudView = Readonly<{
   player: Player;
   direction: string;
-  attack: number;
-  defense: number;
+  attackBonus: number;
+  armorClass: number;
+  torches: number;
+  objective: string;
 }>;
 
 function requiredElement<T extends Element>(selector: string): T {
@@ -26,8 +31,11 @@ function requiredElement<T extends Element>(selector: string): T {
 
 function itemStats(item: InventoryItem): string {
   const definition = ITEM_DEFINITIONS[item.definitionId];
-  if (definition.kind === "weapon") return `WEAPON · ATK +${definition.attack ?? 0}`;
-  if (definition.kind === "armor") return `ARMOR · DEF +${definition.defense ?? 0}`;
+  if (definition.kind === "weapon") {
+    const damage = definition.damage ? formatDamageRoll(definition.damage) : "1d2";
+    return `WEAPON · DMG ${damage} · HIT +${definition.attackBonus ?? 0}`;
+  }
+  if (definition.kind === "armor") return `ARMOR · AC +${definition.armorClassBonus ?? 0}`;
   return `CONSUMABLE · HEALS ${definition.healing ?? 0} HP`;
 }
 
@@ -52,6 +60,7 @@ export class GameUi {
   private readonly positionLabel = requiredElement<HTMLElement>("#position");
   private readonly healthLabel = requiredElement<HTMLElement>("#health");
   private readonly combatLog = requiredElement<HTMLElement>("#combat-log");
+  private readonly interactionHint = requiredElement<HTMLElement>("#interaction-hint");
   private readonly inventoryItems = requiredElement<HTMLElement>("#inventory-items");
   private readonly inventoryStats = requiredElement<HTMLElement>("#inventory-stats");
   private readonly inventoryCapacity = requiredElement<HTMLElement>("#inventory-capacity");
@@ -61,6 +70,7 @@ export class GameUi {
   private readonly tooltipDescription = requiredElement<HTMLElement>("#inventory-tooltip-description");
 
   private readonly combatMessages: string[] = [];
+  private interactionKey = "";
   private statusMessage = "Find the treasure beyond the maze";
   private statusUntil = 0;
 
@@ -84,13 +94,28 @@ export class GameUi {
     this.combatLog.replaceChildren();
   }
 
-  renderHud(now: number, { player, direction, attack, defense }: HudView): void {
+  /** Crea un numero temporaneo ancorato alla proiezione del bersaglio. */
+  showCombatPopup(text: string, xRatio: number, yRatio: number, kind: "damage" | "miss"): void {
+    const popup = document.createElement("div");
+    popup.className = `combat-popup ${kind}`;
+    popup.textContent = text;
+    popup.style.left = `${Math.max(0.04, Math.min(0.96, xRatio)) * 100}%`;
+    popup.style.top = `${Math.max(0.08, Math.min(0.9, yRatio)) * 100}%`;
+    this.frame.append(popup);
+    popup.addEventListener("animationend", () => popup.remove(), { once: true });
+  }
+
+  renderHud(
+    now: number,
+    { player, direction, attackBonus, armorClass, torches, objective }: HudView,
+  ): void {
     this.positionLabel.textContent = `${direction} · ${player.column},${player.row} · T${player.turns}`;
-    this.healthLabel.textContent = `HP ${player.health}/${player.maxHealth} · ATK ${attack} · DEF ${defense}`;
+    this.healthLabel.textContent =
+      `HP ${player.health}/${player.maxHealth} · HIT +${attackBonus} · AC ${armorClass} · TORCH ${torches}`;
     this.messageLabel.textContent = this.statusUntil >= now
       ? this.statusMessage
       : player.dead ? "YOU DIED · PRESS R TO RESTART"
-      : player.won ? "TREASURE FOUND" : "Find the treasure";
+      : objective;
     this.messageLabel.classList.toggle("won", player.won);
   }
 
@@ -104,6 +129,35 @@ export class GameUi {
 
   setResolutionBusy(busy: boolean): void {
     this.resolutionButton.disabled = busy;
+  }
+
+  /** Aggiorna cursore contestuale e piccola etichetta accanto al puntatore. */
+  setInteraction(
+    kind: InteractionKind | null,
+    label = "",
+    clientX = 0,
+    clientY = 0,
+  ): void {
+    if (!kind) {
+      if (!this.interactionKey) return;
+      this.interactionKey = "";
+      delete this.frame.dataset.interaction;
+      this.interactionHint.hidden = true;
+      return;
+    }
+    const bounds = this.frame.getBoundingClientRect();
+    const localX = clientX - bounds.left;
+    const localY = clientY - bounds.top;
+    const nextKey = `${kind}:${label}:${Math.round(localX)}:${Math.round(localY)}`;
+    if (nextKey === this.interactionKey) return;
+    this.interactionKey = nextKey;
+    this.frame.dataset.interaction = kind;
+    this.interactionHint.textContent = label;
+    this.interactionHint.style.left = `${localX}px`;
+    this.interactionHint.style.top = `${localY}px`;
+    this.interactionHint.classList.toggle("flip-x", localX > bounds.width * 0.62);
+    this.interactionHint.classList.toggle("flip-y", localY > bounds.height * 0.78);
+    this.interactionHint.hidden = false;
   }
 
   /**
@@ -132,8 +186,9 @@ export class GameUi {
   }
 
   /** Ricostruisce la griglia di sole icone e collega hover, focus e click. */
-  renderInventory({ player, attack, defense, disabled, onUse }: InventoryView): void {
-    this.inventoryStats.textContent = `HP ${player.health}/${player.maxHealth} · ATK ${attack} · DEF ${defense}`;
+  renderInventory({ player, attackBonus, armorClass, torches, disabled, onUse }: InventoryView): void {
+    this.inventoryStats.textContent =
+      `HP ${player.health}/${player.maxHealth} · HIT +${attackBonus} · AC ${armorClass} · TORCH ${torches}`;
     this.inventoryCapacity.textContent = `${player.inventory.length}/${INVENTORY_CAPACITY}`;
     this.inventoryItems.replaceChildren();
     this.hideTooltip();

@@ -139,6 +139,15 @@ main { display: grid; gap: var(--ui-10); }
   touch-action: none;
 }
 
+.frame[data-interaction="attack"] {
+  cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' shape-rendering='crispEdges'%3E%3Cpath fill='%23130905' d='M17 1h6v6L12 18l-2-2-3 3 2 2-2 2-6-6 2-2 2 2 3-3-2-2z'/%3E%3Cpath fill='%23e9dfc4' d='M18 3h3v3L11 16l-3-3z'/%3E%3Cpath fill='%23d08a35' d='m5 16 3 3-1 1-3-3z'/%3E%3C/svg%3E") 21 3, crosshair;
+}
+
+.frame[data-interaction="pickup"],
+.frame[data-interaction="take-torch"] { cursor: copy; }
+.frame[data-interaction="place-torch"] { cursor: cell; }
+.frame[data-interaction="loot"] { cursor: pointer; }
+.frame[data-interaction="inspect"] { cursor: help; }
 .frame.looking { cursor: grabbing; }
 
 canvas {
@@ -222,6 +231,64 @@ canvas {
 }
 
 #combat-log div:last-child { color: #ffe09c; }
+
+.combat-popup {
+  position: absolute;
+  z-index: 4;
+  padding: var(--ui-2) var(--ui-4) var(--ui-1);
+  border: 1px solid #8f2f22;
+  background: #170504dc;
+  color: #ff7658;
+  font-size: var(--ui-18);
+  line-height: 1;
+  text-shadow:
+    calc(0px - var(--ui-1)) 0 #1a0503,
+    var(--ui-1) 0 #1a0503,
+    0 calc(0px - var(--ui-1)) #1a0503,
+    0 var(--ui-1) #1a0503;
+  pointer-events: none;
+  animation: combat-float 1200ms ease-out forwards;
+}
+
+.combat-popup.miss {
+  border-color: #6b593d;
+  color: #e8d29d;
+  font-size: var(--ui-14);
+}
+
+@keyframes combat-float {
+  from { translate: -50% -30%; opacity: 1; }
+  55% { opacity: 1; }
+  to { translate: -50% calc(-30% - var(--ui-32)); opacity: 0; }
+}
+
+#interaction-hint {
+  position: absolute;
+  z-index: 2;
+  translate: var(--ui-12) var(--ui-12);
+  width: max-content;
+  max-width: 48%;
+  padding: var(--ui-4) var(--ui-6) var(--ui-3);
+  border: 1px solid #614321;
+  background: #090603e8;
+  color: #e7d3a6;
+  font-size: var(--ui-10);
+  line-height: 1;
+  text-transform: uppercase;
+  text-shadow: var(--ui-1) var(--ui-1) #000;
+  pointer-events: none;
+}
+
+#interaction-hint[hidden] { display: none; }
+#interaction-hint.flip-x { translate: calc(-100% - var(--ui-12)) var(--ui-12); }
+#interaction-hint.flip-y { translate: var(--ui-12) calc(-100% - var(--ui-12)); }
+#interaction-hint.flip-x.flip-y {
+  translate: calc(-100% - var(--ui-12)) calc(-100% - var(--ui-12));
+}
+.frame[data-interaction="attack"] #interaction-hint { color: #ff8a68; border-color: #913f2d; }
+.frame[data-interaction="loot"] #interaction-hint { color: #ffd06f; border-color: #a26d2c; }
+.frame[data-interaction="place-torch"] #interaction-hint,
+.frame[data-interaction="take-torch"] #interaction-hint { color: #ffb252; }
 
 #inventory {
   position: absolute;

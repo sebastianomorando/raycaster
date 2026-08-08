@@ -76,7 +76,7 @@ const torchMesh = baseMesh(torchSource, fireMaterials, fireMaterials.DarkMetal);
 const woodfireMesh = baseMesh(woodfireSource, fireMaterials, fireMaterials.Wood);
 const columnMesh = baseMesh(columnSource, columnMaterials, columnMaterials.Grey_Floor);
 
-const torchPlacements = [
+const initialTorchMounts = [
   { column: 5, row: 2, offset: v(0.9, 0.78, 0), lightOffset: v(0.64, 1.25, 0), rotation: Math.PI / 2 },
   { column: 7, row: 2, offset: v(-0.9, 0.78, 0), lightOffset: v(-0.64, 1.25, 0), rotation: -Math.PI / 2 },
   { column: 5, row: 6, offset: v(-0.9, 0.78, 0), lightOffset: v(-0.64, 1.25, 0), rotation: -Math.PI / 2 },
@@ -84,6 +84,30 @@ const torchPlacements = [
   { column: 5, row: 12, offset: v(0.9, 0.78, 0), lightOffset: v(0.64, 1.25, 0), rotation: Math.PI / 2 },
   { column: 7, row: 12, offset: v(-0.9, 0.78, 0), lightOffset: v(-0.64, 1.25, 0), rotation: -Math.PI / 2 },
 ] as const;
+
+export type TorchPlacement = Readonly<{
+  id: number;
+  position: Vec3;
+  lightPosition: Vec3;
+  rotation: number;
+}>;
+
+let nextTorchId = 1;
+
+function createInitialTorches(): TorchPlacement[] {
+  return initialTorchMounts.map((torch) => ({
+    id: nextTorchId++,
+    position: add(cellPosition(torch.column, torch.row), torch.offset),
+    lightPosition: add(cellPosition(torch.column, torch.row), torch.lightOffset),
+    rotation: torch.rotation,
+  }));
+}
+
+/** Torce attualmente fissate alle pareti, interrogabili dal raycast di gioco. */
+export const torches: TorchPlacement[] = createInitialTorches();
+
+const goal = cellPosition(goalCell.column, goalCell.row);
+export const chestInteractionPosition = add(goal, v(0, 0.46, 0.68));
 
 /** Traduce la mappa simbolica in istanze mesh statiche. */
 function buildDungeon(): MeshInstance[] {
@@ -125,16 +149,15 @@ function buildDungeon(): MeshInstance[] {
   for (const cell of findCells("C")) {
     instances.push(createMeshInstance(columnMesh, cellPosition(cell.column, cell.row), 0.49));
   }
-  for (const torch of torchPlacements) {
+  for (const torch of torches) {
     instances.push(createMeshInstance(
       torchMesh,
-      add(cellPosition(torch.column, torch.row), torch.offset),
+      torch.position,
       0.78,
       torch.rotation,
     ));
   }
 
-  const goal = cellPosition(goalCell.column, goalCell.row);
   instances.push(createMeshInstance(archMesh, add(goal, v(0, 0, -1)), 0.5));
   instances.push(createMeshInstance(chestMesh, add(goal, v(0, 0.01, 0.68)), 0.88, Math.PI));
 
@@ -144,20 +167,82 @@ function buildDungeon(): MeshInstance[] {
   return instances;
 }
 
-export const dungeonScene = createMeshScene(buildDungeon());
+function createSceneLights(): SceneLight[] {
+  return [
+    ...findCells("F").map((cell, index) => ({
+      position: add(cellPosition(cell.column, cell.row), v(0, 0.52, 0)),
+      color: v(1, 0.24, 0.035), intensity: 24, radius: 0.2,
+      phase: index * 1.71, flicker: 0.16,
+    })),
+    ...torches.map((torch, index) => ({
+      position: torch.lightPosition,
+      color: v(1, 0.38, 0.08), intensity: 13, radius: 0.09,
+      phase: 2.3 + index * 1.37, flicker: 0.11,
+    })),
+  ];
+}
 
-export const staticLights: readonly SceneLight[] = [
-  ...findCells("F").map((cell, index) => ({
-    position: add(cellPosition(cell.column, cell.row), v(0, 0.52, 0)),
-    color: v(1, 0.24, 0.035), intensity: 24, radius: 0.2,
-    phase: index * 1.71, flicker: 0.16,
-  })),
-  ...torchPlacements.map((torch, index) => ({
-    position: add(cellPosition(torch.column, torch.row), torch.lightOffset),
-    color: v(1, 0.38, 0.08), intensity: 13, radius: 0.09,
-    phase: 2.3 + index * 1.37, flicker: 0.11,
-  })),
-];
+export let dungeonScene = createMeshScene(buildDungeon());
+
+/** L'array resta stabile perché il path tracer CPU ne conserva il riferimento. */
+export const staticLights: SceneLight[] = createSceneLights();
+
+function rebuildDungeonScene(): void {
+  dungeonScene = createMeshScene(buildDungeon());
+  staticLights.splice(0, staticLights.length, ...createSceneLights());
+}
+
+/** Stacca una torcia dalla parete e aggiorna geometria e luci. */
+export function detachTorch(torchId: number): boolean {
+  const index = torches.findIndex((torch) => torch.id === torchId);
+  if (index < 0) return false;
+  torches.splice(index, 1);
+  rebuildDungeonScene();
+  return true;
+}
+
+/**
+ * Fissa una nuova torcia sul punto colpito dal raycast.
+ * La normale orienta la mesh e sposta fiamma e luce verso la stanza.
+ */
+export function attachTorch(point: Vec3, normal: Vec3): TorchPlacement | null {
+  if (Math.abs(normal.y) > 0.35) return null;
+  const horizontalLength = Math.hypot(normal.x, normal.z);
+  if (horizontalLength < 0.8) return null;
+  const wallNormal = v(normal.x / horizontalLength, 0, normal.z / horizontalLength);
+  const height = Math.max(0.5, Math.min(1.42, point.y));
+  const position = v(
+    point.x + wallNormal.x * 0.035,
+    height,
+    point.z + wallNormal.z * 0.035,
+  );
+  if (torches.some((torch) => Math.hypot(
+    torch.position.x - position.x,
+    torch.position.y - position.y,
+    torch.position.z - position.z,
+  ) < 0.62)) return null;
+
+  const torch: TorchPlacement = {
+    id: nextTorchId++,
+    position,
+    lightPosition: add(position, v(
+      wallNormal.x * 0.3,
+      0.47,
+      wallNormal.z * 0.3,
+    )),
+    rotation: Math.atan2(-wallNormal.x, wallNormal.z),
+  };
+  torches.push(torch);
+  rebuildDungeonScene();
+  return torch;
+}
+
+/** Ripristina le torce iniziali insieme alla scena, usato al restart. */
+export function resetDungeonState(): void {
+  nextTorchId = 1;
+  torches.splice(0, torches.length, ...createInitialTorches());
+  rebuildDungeonScene();
+}
 
 /** Intersezione centralizzata, condivisa da path tracer e impostori. */
 export function sceneHit(ray: Ray, minDistance = 0.001, maxDistance = Infinity): Hit | null {

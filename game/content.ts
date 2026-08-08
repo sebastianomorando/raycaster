@@ -9,6 +9,7 @@ import spiritTonicIconUrl from "../icons/Potions/Major_Potion_mana.png";
 import emberBladeIconUrl from "../icons/Weapons/Sword_fire.png";
 import ironSwordIconUrl from "../icons/Weapons/Sword.png";
 import rustySwordIconUrl from "../icons/Weapons/Sword_Rusty.png";
+import type { DamageRoll } from "./combat.ts";
 import { startCell, type Cell } from "./level.ts";
 
 export type ItemId =
@@ -25,8 +26,9 @@ export type ItemDefinition = Readonly<{
   description: string;
   kind: "weapon" | "armor" | "consumable";
   icon: string;
-  attack?: number;
-  defense?: number;
+  attackBonus?: number;
+  damage?: DamageRoll;
+  armorClassBonus?: number;
   healing?: number;
 }>;
 
@@ -44,8 +46,9 @@ export type EnemyTemplate = Readonly<{
   row: number;
   height: number;
   health: number;
-  attack: number;
-  defense: number;
+  attackBonus: number;
+  armorClass: number;
+  damage: DamageRoll;
   sight: number;
   drop: ItemId;
 }>;
@@ -58,6 +61,7 @@ export type Enemy = Omit<EnemyTemplate, "column" | "row"> & {
   alerted: boolean;
   alive: boolean;
   image: HTMLImageElement;
+  hitFlashUntil: number;
 };
 
 export type Player = {
@@ -66,8 +70,8 @@ export type Player = {
   facing: number;
   maxHealth: number;
   health: number;
-  baseAttack: number;
-  baseDefense: number;
+  baseAttackBonus: number;
+  baseArmorClass: number;
   turns: number;
   dead: boolean;
   won: boolean;
@@ -80,23 +84,26 @@ export type Player = {
 export const ITEM_DEFINITIONS: Readonly<Record<ItemId, ItemDefinition>> = {
   rusty_sword: {
     name: "Rusty sword", description: "An old blade, still sharp enough to draw blood.",
-    kind: "weapon", icon: rustySwordIconUrl, attack: 2,
+    kind: "weapon", icon: rustySwordIconUrl,
+    attackBonus: 0, damage: { bonus: 2, dice: 1, sides: 4 },
   },
   iron_sword: {
     name: "Iron sword", description: "Solid, heavy, and dependable.",
-    kind: "weapon", icon: ironSwordIconUrl, attack: 4,
+    kind: "weapon", icon: ironSwordIconUrl,
+    attackBonus: 1, damage: { bonus: 2, dice: 1, sides: 6 },
   },
   ember_blade: {
     name: "Ember blade", description: "Its edge burns with a flame that never fades.",
-    kind: "weapon", icon: emberBladeIconUrl, attack: 6,
+    kind: "weapon", icon: emberBladeIconUrl,
+    attackBonus: 2, damage: { bonus: 3, dice: 1, sides: 8 },
   },
   leather_armor: {
     name: "Leather armor", description: "Light protection, scarred by a long journey.",
-    kind: "armor", icon: leatherArmorIconUrl, defense: 2,
+    kind: "armor", icon: leatherArmorIconUrl, armorClassBonus: 2,
   },
   bone_mail: {
     name: "Bone mail", description: "Ancient bones held together by dark magic.",
-    kind: "armor", icon: boneMailIconUrl, defense: 4,
+    kind: "armor", icon: boneMailIconUrl, armorClassBonus: 4,
   },
   healing_potion: {
     name: "Healing potion", description: "Mends wounds that have not cut too deep.",
@@ -153,19 +160,23 @@ for (const itemId of Object.keys(ITEM_DEFINITIONS) as ItemId[]) {
 export const ENEMY_TEMPLATES: readonly EnemyTemplate[] = [
   {
     name: "Imp", source: impImpostorUrl, column: 2, row: 3, height: 1.25,
-    health: 8, attack: 4, defense: 0, sight: 6, drop: "healing_potion",
+    health: 8, attackBonus: 2, armorClass: 10,
+    damage: { bonus: 1, dice: 1, sides: 4 }, sight: 6, drop: "healing_potion",
   },
   {
     name: "Ghost", source: ghostImpostorUrl, column: 13, row: 6, height: 1.5,
-    health: 12, attack: 5, defense: 1, sight: 7, drop: "spirit_tonic",
+    health: 12, attackBonus: 3, armorClass: 12,
+    damage: { bonus: 1, dice: 1, sides: 6 }, sight: 7, drop: "spirit_tonic",
   },
   {
     name: "Magma demon", source: magmaDemonImpostorUrl, column: 9, row: 5, height: 1.55,
-    health: 18, attack: 7, defense: 2, sight: 6, drop: "ember_blade",
+    health: 18, attackBonus: 4, armorClass: 13,
+    damage: { bonus: 2, dice: 1, sides: 6 }, sight: 6, drop: "ember_blade",
   },
   {
     name: "Lich", source: lichImpostorUrl, column: 8, row: 13, height: 1.5,
-    health: 24, attack: 8, defense: 3, sight: 8, drop: "bone_mail",
+    health: 24, attackBonus: 5, armorClass: 15,
+    damage: { bonus: 2, dice: 1, sides: 8 }, sight: 8, drop: "bone_mail",
   },
 ];
 
@@ -182,6 +193,7 @@ export function createEnemies(): Enemy[] {
       alerted: false,
       alive: true,
       image,
+      hitFlashUntil: 0,
     };
   });
 }
@@ -207,8 +219,8 @@ export class GameEntityFactory {
       facing: 2,
       maxHealth: 30,
       health: 30,
-      baseAttack: 3,
-      baseDefense: 0,
+      baseAttackBonus: 2,
+      baseArmorClass: 10,
       turns: 0,
       dead: false,
       won: false,
